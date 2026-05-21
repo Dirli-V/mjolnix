@@ -9,8 +9,11 @@ use crate::auth;
 use crate::config::{self, Config};
 use crate::db::{self, Build, BuildStatus, Repo};
 use crate::hook;
+use crate::logo;
 
 pub async fn run(config: &Config, pool: &SqlitePool) -> Result<()> {
+    logo::show_welcome_logo();
+
     let user_id = auth::current_user_id(pool).await?;
     let mut repos = db::list_repos_for_user(pool, user_id).await?;
 

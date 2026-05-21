@@ -1,6 +1,10 @@
 # mjolnix
 
+![mjolnix logo](assets/mjolnix.png)
+
 Git hosting over SSH with automatic Nix flake builds on push.
+
+When you connect over SSH (`ssh my-host` / `mjolnix` TUI), the logo is shown in terminals that support the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) (Kitty, Ghostty, etc.). Set `MJOLNIX_NO_LOGO=1` to disable.
 
 ## Quick start (local)
 

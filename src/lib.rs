@@ -5,4 +5,5 @@ pub mod daemon;
 pub mod db;
 pub mod git;
 pub mod hook;
+pub mod logo;
 pub mod tui;
