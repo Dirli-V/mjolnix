@@ -8,8 +8,15 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub repos_dir: PathBuf,
     pub db_path: PathBuf,
-    /// Shown in clone URLs (e.g. `my-host.com:public/foo.git`).
+    pub work_dir: PathBuf,
+    pub logs_dir: PathBuf,
+    pub socket_path: PathBuf,
     pub host: String,
+    pub substituter_url: Option<String>,
+    pub max_parallel_builds: usize,
+    pub build_timeout_secs: u64,
+    /// Path to mjolnix binary for hook scripts.
+    pub mjolnix_bin: PathBuf,
 }
 
 impl Config {
@@ -24,23 +31,58 @@ impl Config {
             .context("set MJOLNIX_DATA_DIR or use a standard home directory layout")?;
 
         let host = env::var("MJOLNIX_HOST").unwrap_or_else(|_| "localhost".into());
+        let substituter_url = env::var("MJOLNIX_SUBSTITUTER_URL").ok();
+
+        let max_parallel_builds = env::var("MJOLNIX_MAX_PARALLEL_BUILDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2);
+
+        let build_timeout_secs = env::var("MJOLNIX_BUILD_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3600);
+
+        let socket_path = env::var("MJOLNIX_SOCKET")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| data_dir.join("mjolnixd.sock"));
+
+        let mjolnix_bin = env::var("MJOLNIX_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                env::current_exe().unwrap_or_else(|_| PathBuf::from("mjolnix"))
+            });
 
         let repos_dir = data_dir.join("repos");
         let db_path = data_dir.join("mjolnix.db");
+        let work_dir = data_dir.join("work");
+        let logs_dir = data_dir.join("logs");
 
         Ok(Self {
             data_dir,
             repos_dir,
             db_path,
+            work_dir,
+            logs_dir,
+            socket_path,
             host,
+            substituter_url,
+            max_parallel_builds,
+            build_timeout_secs,
+            mjolnix_bin,
         })
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
-        std::fs::create_dir_all(&self.data_dir)
-            .with_context(|| format!("create data dir {}", self.data_dir.display()))?;
-        std::fs::create_dir_all(&self.repos_dir)
-            .with_context(|| format!("create repos dir {}", self.repos_dir.display()))?;
+        for dir in [
+            &self.data_dir,
+            &self.repos_dir,
+            &self.work_dir,
+            &self.logs_dir,
+        ] {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("create {}", dir.display()))?;
+        }
         Ok(())
     }
 
@@ -52,6 +94,16 @@ impl Config {
 
     pub fn clone_url(&self, namespace: &str, name: &str) -> String {
         format!("{}:{namespace}/{name}.git", self.host)
+    }
+
+    pub fn build_log_path(&self, repo_id: i64, build_id: i64) -> PathBuf {
+        self.logs_dir
+            .join(repo_id.to_string())
+            .join(format!("{build_id}.log"))
+    }
+
+    pub fn build_work_path(&self, repo_id: i64, rev: &str) -> PathBuf {
+        self.work_dir.join(repo_id.to_string()).join(rev)
     }
 }
 

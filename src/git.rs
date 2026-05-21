@@ -6,10 +6,12 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use sqlx::sqlite::SqlitePool;
+use sqlx::Row;
 
 use crate::auth;
 use crate::config::{self, Config};
 use crate::db;
+use crate::hook;
 
 pub fn remote_git_command() -> Option<String> {
     if let Ok(cmd) = env::var("SSH_ORIGINAL_COMMAND") {
@@ -53,7 +55,30 @@ pub async fn run(config: &Config, pool: &SqlitePool, command: &str) -> Result<()
         bail!("invalid repository path");
     }
 
-    exec_git_helper(verb, &disk_path)
+    match verb {
+        "git-receive-pack" => run_receive_pack(verb, &disk_path).await,
+        _ => exec_git_helper(verb, &disk_path),
+    }
+}
+
+async fn run_receive_pack(verb: &str, repo_path: &Path) -> Result<()> {
+    let repo = repo_path
+        .to_str()
+        .context("repository path is not valid UTF-8")?;
+
+    let status = Command::new(verb)
+        .arg(repo)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .with_context(|| format!("run {verb}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        std::process::exit(status.code().unwrap_or(1));
+    }
 }
 
 fn parse_git_command(command: &str) -> Result<(&'static str, &str)> {
@@ -112,6 +137,19 @@ fn exec_git_helper(verb: &str, repo_path: &Path) -> Result<()> {
             bail!("{verb} exited with {status}");
         }
     }
+}
+
+/// Install post-receive hooks on all repos in the database.
+pub async fn install_hooks_all(config: &Config, pool: &SqlitePool) -> Result<()> {
+    let rows = sqlx::query("SELECT namespace, name FROM repos")
+        .fetch_all(pool)
+        .await?;
+    for row in rows {
+        let namespace: String = row.get("namespace");
+        let name: String = row.get("name");
+        hook::install_post_receive_hook(config, &namespace, &name)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

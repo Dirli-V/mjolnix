@@ -99,6 +99,8 @@
 
           packages = {
             default = mjolnix;
+            inherit mjolnix;
+            mjolnixd = mjolnix; # same derivation provides mjolnix and mjolnixd binaries
           };
 
           apps = {
@@ -108,6 +110,21 @@
               meta = (mjolnix.meta or { }) // {
                 description = "mjolnix";
                 mainProgram = "mjolnix";
+              };
+            };
+            mjolnixd = {
+              type = "app";
+              program = "${mjolnix}/bin/mjolnixd";
+              meta = (mjolnix.meta or { }) // {
+                description = "mjolnix build daemon";
+                mainProgram = "mjolnixd";
+              };
+            };
+            harmonia = {
+              type = "app";
+              program = "${pkgs.harmonia}/bin/harmonia";
+              meta = {
+                description = "Nix binary cache for mjolnix build outputs";
               };
             };
           };
@@ -122,7 +139,9 @@
 
               # Extra inputs can be added here; cargo and rustc are provided by default.
               packages = [
-                # pkgs.ripgrep
+                pkgs.git
+                pkgs.nix
+                pkgs.harmonia
               ];
 
               shellHook = ''
@@ -130,6 +149,11 @@
                 export PATH="$root/scripts:''${PATH}"
                 export MJOLNIX_DATA_DIR="''${MJOLNIX_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/mjolnix}"
                 export MJOLNIX_KEY_FINGERPRINT="''${MJOLNIX_KEY_FINGERPRINT:-dev:local}"
+                export MJOLNIX_BIN="$root/target/debug/mjolnix"
+                export MJOLNIX_SUBSTITUTER_URL="''${MJOLNIX_SUBSTITUTER_URL:-http://127.0.0.1:5000}"
+                echo "mjolnix dev: data=$MJOLNIX_DATA_DIR substituter=$MJOLNIX_SUBSTITUTER_URL"
+                echo "  run-mjolnixd   start build daemon"
+                echo "  nix run .#harmonia -- -c $PWD/harmonia-dev.toml   binary cache (optional)"
               '';
             };
           };

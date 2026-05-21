@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Start mjolnixd with repo-local defaults (for local development).
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "${script_dir}/lib.sh"
+
+export MJOLNIX_DATA_DIR="${MJOLNIX_DATA_DIR:-$(mjolnix_default_data_dir)}"
+
+repo_root="$(cd "${script_dir}/.." && pwd)"
+if [[ -x "${repo_root}/target/debug/mjolnixd" ]]; then
+  exec "${repo_root}/target/debug/mjolnixd"
+elif [[ -x "${repo_root}/target/release/mjolnixd" ]]; then
+  exec "${repo_root}/target/release/mjolnixd"
+fi
+
+exec mjolnixd

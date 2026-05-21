@@ -3,8 +3,21 @@ name = "mjolnix"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mjolnix"
+path = "src/main.rs"
+
+[[bin]]
+name = "mjolnixd"
+path = "src/bin/mjolnixd.rs"
+
 [dependencies]
 anyhow = "1"
 directories = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }

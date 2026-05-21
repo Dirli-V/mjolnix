@@ -1,0 +1,6 @@
+# Local Harmonia config for mjolnix development.
+# Generate a keypair: harmonia --generate-key-path ./harmonia.key
+# Then set trusted-public-keys from the printed public key.
+
+bind = "127.0.0.1:5000"
+workers = 2
