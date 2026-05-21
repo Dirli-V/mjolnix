@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Run git(1) with mjolnix-ssh as the transport (local mjolnix testing).
+#
+# Examples:
+#   git-with-mjolnix clone localhost:public/demo.git
+#   cd demo && git-with-mjolnix push origin main
+#
+# Environment (optional):
+#   MJOLNIX_DATA_DIR         default: $XDG_DATA_HOME/mjolnix or ~/.local/share/mjolnix
+#   MJOLNIX_KEY_FINGERPRINT  default: dev:local (must match the user that created repos)
+#   MJOLNIX_BIN              path to mjolnix binary
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "${script_dir}/lib.sh"
+
+export MJOLNIX_DATA_DIR="${MJOLNIX_DATA_DIR:-$(mjolnix_default_data_dir)}"
+export MJOLNIX_KEY_FINGERPRINT="${MJOLNIX_KEY_FINGERPRINT:-dev:local}"
+export GIT_SSH_COMMAND="${script_dir}/mjolnix-ssh"
+
+exec git "$@"

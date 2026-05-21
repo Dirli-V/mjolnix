@@ -124,6 +124,13 @@
               packages = [
                 # pkgs.ripgrep
               ];
+
+              shellHook = ''
+                root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+                export PATH="$root/scripts:''${PATH}"
+                export MJOLNIX_DATA_DIR="''${MJOLNIX_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/mjolnix}"
+                export MJOLNIX_KEY_FINGERPRINT="''${MJOLNIX_KEY_FINGERPRINT:-dev:local}"
+              '';
             };
           };
         };

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Fake "ssh" for local git testing: forwards to mjolnix git mode.
+#
+# Git invokes:  <this-script> <host> <remote-command...>
+# Example:      mjolnix-ssh localhost git-upload-pack 'public/demo.git'
+#
+# Usage:
+#   git-with-mjolnix clone localhost:public/demo.git
+# Or:
+#   git -c core.sshCommand="$(command -v mjolnix-ssh)" clone localhost:public/demo.git
+
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+  echo "usage: mjolnix-ssh <host> <remote-command...>" >&2
+  exit 2
+fi
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "${script_dir}/lib.sh"
+
+_host="$1"
+shift
+
+export SSH_ORIGINAL_COMMAND="$*"
+export SSH_CONNECTION="127.0.0.1 22 127.0.0.1 22"
+export MJOLNIX_DATA_DIR="${MJOLNIX_DATA_DIR:-$(mjolnix_default_data_dir)}"
+export MJOLNIX_KEY_FINGERPRINT="${MJOLNIX_KEY_FINGERPRINT:-dev:local}"
+
+repo_root="$(cd "${script_dir}/.." && pwd)"
+
+if [[ -n "${MJOLNIX_BIN:-}" ]]; then
+  bin="$MJOLNIX_BIN"
+elif [[ -x "${repo_root}/target/debug/mjolnix" ]]; then
+  bin="${repo_root}/target/debug/mjolnix"
+elif [[ -x "${repo_root}/target/release/mjolnix" ]]; then
+  bin="${repo_root}/target/release/mjolnix"
+else
+  echo "mjolnix-ssh: no mjolnix binary found (build with: nix develop -c cargo build)" >&2
+  exit 1
+fi
+
+exec "$bin"
