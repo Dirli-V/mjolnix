@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 
 use crate::build;
 use crate::config::Config;
@@ -66,10 +66,7 @@ async fn handle_connection(stream: UnixStream, job_tx: &mpsc::UnboundedSender<i6
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
 
-    let line = lines
-        .next_line()
-        .await?
-        .context("empty request")?;
+    let line = lines.next_line().await?.context("empty request")?;
 
     let response = match parse_request(&line) {
         Request::Enqueue { build_id } => {
@@ -171,10 +168,7 @@ pub async fn enqueue_build(config: &Config, build_id: i64) -> Result<()> {
 
     let (reader, _) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
-    let response = lines
-        .next_line()
-        .await?
-        .unwrap_or_default();
+    let response = lines.next_line().await?.unwrap_or_default();
 
     if response.trim() != "ok" {
         bail!("mjolnixd enqueue failed: {response}");

@@ -1,6 +1,6 @@
 # mjolnix
 
-![mjolnix logo](assets/mjolnix.png)
+![mjolnix logo](assets/mjolnix.png) (source: [src/assets/mjolnix.png](src/assets/mjolnix.png))
 
 Git hosting over SSH with automatic Nix flake builds on push.
 
@@ -56,6 +56,36 @@ Set `MJOLNIX_SUBSTITUTER_URL` so the SSH TUI prints copy hints after successful 
 | `MJOLNIX_SUBSTITUTER_URL` | Binary cache URL shown in TUI |
 | `MJOLNIX_MAX_PARALLEL_BUILDS` | Daemon concurrency (default: 2) |
 | `MJOLNIX_BUILD_TIMEOUT_SECS` | Per-build timeout (default: 3600) |
+
+## NixOS module
+
+```nix
+{
+  inputs.mjolnix.url = "github:YOUR_ORG/mjolnix";
+
+  outputs = { inputs, ... }: {
+    nixosConfigurations.my-server = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        inputs.mjolnix.nixosModules.default
+        {
+          nixpkgs.overlays = [ inputs.mjolnix.overlays.default ];
+          services.mjolnix = {
+            enable = true;
+            host = "git.example.com";
+            authorizedKeys = [
+              "ssh-ed25519 AAAA... you@laptop"
+            ];
+            binaryCache.enable = true; # Harmonia on port 5000
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+Verify with `nix flake check` (runs the NixOS test).
 
 ## Architecture
 

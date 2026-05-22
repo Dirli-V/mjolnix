@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 
 use crate::config::Config;
 
@@ -208,14 +208,13 @@ pub async fn user_owns_repo(
     namespace: &str,
     name: &str,
 ) -> Result<bool> {
-    let row = sqlx::query(
-        "SELECT 1 AS ok FROM repos WHERE user_id = ? AND namespace = ? AND name = ?",
-    )
-    .bind(user_id)
-    .bind(namespace)
-    .bind(name)
-    .fetch_optional(pool)
-    .await?;
+    let row =
+        sqlx::query("SELECT 1 AS ok FROM repos WHERE user_id = ? AND namespace = ? AND name = ?")
+            .bind(user_id)
+            .bind(namespace)
+            .bind(name)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.is_some())
 }
 
@@ -225,15 +224,14 @@ pub async fn insert_build_queued(
     rev: &str,
     ref_name: &str,
 ) -> Result<i64> {
-    let result = sqlx::query(
-        "INSERT INTO builds (repo_id, rev, ref_name, status) VALUES (?, ?, ?, ?)",
-    )
-    .bind(repo_id)
-    .bind(rev)
-    .bind(ref_name)
-    .bind(BuildStatus::Queued.as_str())
-    .execute(pool)
-    .await?;
+    let result =
+        sqlx::query("INSERT INTO builds (repo_id, rev, ref_name, status) VALUES (?, ?, ?, ?)")
+            .bind(repo_id)
+            .bind(rev)
+            .bind(ref_name)
+            .bind(BuildStatus::Queued.as_str())
+            .execute(pool)
+            .await?;
     Ok(result.last_insert_rowid())
 }
 
@@ -266,11 +264,7 @@ pub async fn set_build_success(
     Ok(())
 }
 
-pub async fn set_build_failed(
-    pool: &SqlitePool,
-    build_id: i64,
-    error_summary: &str,
-) -> Result<()> {
+pub async fn set_build_failed(pool: &SqlitePool, build_id: i64, error_summary: &str) -> Result<()> {
     sqlx::query(
         "UPDATE builds SET status = ?, finished_at = datetime('now'), error_summary = ? WHERE id = ?",
     )
@@ -291,21 +285,25 @@ pub async fn get_build(pool: &SqlitePool, build_id: i64) -> Result<Option<Build>
 }
 
 pub async fn latest_build_for_repo(pool: &SqlitePool, repo_id: i64) -> Result<Option<Build>> {
-    let row = sqlx::query("SELECT * FROM builds WHERE repo_id = ? ORDER BY created_at DESC LIMIT 1")
-        .bind(repo_id)
-        .fetch_optional(pool)
-        .await?;
+    let row =
+        sqlx::query("SELECT * FROM builds WHERE repo_id = ? ORDER BY created_at DESC LIMIT 1")
+            .bind(repo_id)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|r| row_to_build(&r)))
 }
 
-pub async fn list_builds_for_repo(pool: &SqlitePool, repo_id: i64, limit: i64) -> Result<Vec<Build>> {
-    let rows = sqlx::query(
-        "SELECT * FROM builds WHERE repo_id = ? ORDER BY created_at DESC LIMIT ?",
-    )
-    .bind(repo_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+pub async fn list_builds_for_repo(
+    pool: &SqlitePool,
+    repo_id: i64,
+    limit: i64,
+) -> Result<Vec<Build>> {
+    let rows =
+        sqlx::query("SELECT * FROM builds WHERE repo_id = ? ORDER BY created_at DESC LIMIT ?")
+            .bind(repo_id)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?;
     Ok(rows.iter().map(row_to_build).collect())
 }
 

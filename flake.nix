@@ -39,27 +39,22 @@
           inherit (pkgs) lib;
 
           craneLib = crane.mkLib pkgs;
-          src = craneLib.cleanCargoSource ./.;
+          # cleanCargoSource omits PNG assets required by include_bytes!
+          src = pkgs.runCommandLocal "mjolnix-source" { } ''
+            mkdir -p $out
+            cp -r ${craneLib.cleanCargoSource ./.}/* $out/
+            chmod -R u+w $out
+            install -D ${./src/assets/mjolnix.png} $out/src/assets/mjolnix.png
+          '';
 
-          # Common arguments can be set here to avoid repeating them later
           commonArgs = {
             inherit src;
             strictDeps = true;
-
-            buildInputs = [
-              # Add additional build inputs here
-            ];
-
-            # Additional environment variables can be set directly
-            # MY_CUSTOM_VAR = "some value";
+            buildInputs = [ ];
           };
 
-          # Build *just* the cargo dependencies, so we can reuse
-          # all of that work (e.g. via cachix) when running in CI
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-          # Build the actual crate itself, reusing the dependency
-          # artifacts from above.
           mjolnix = craneLib.buildPackage (
             commonArgs
             // {
@@ -69,7 +64,6 @@
         in
         {
           checks = {
-            # Build the crate as part of `nix flake check` for convenience
             inherit mjolnix;
 
             mjolnix-clippy = craneLib.cargoClippy (
@@ -87,7 +81,6 @@
               }
             );
 
-            # Check formatting
             mjolnix-fmt = craneLib.cargoFmt {
               inherit src;
             };
@@ -95,12 +88,17 @@
             mjolnix-toml-fmt = craneLib.taploFmt {
               src = pkgs.lib.sources.sourceFilesBySuffices src [ ".toml" ];
             };
+
+            nixosTest = import ./nixos-tests/mjolnix.nix {
+              inherit pkgs lib;
+              package = mjolnix;
+            };
           };
 
           packages = {
             default = mjolnix;
             inherit mjolnix;
-            mjolnixd = mjolnix; # same derivation provides mjolnix and mjolnixd binaries
+            mjolnixd = mjolnix;
           };
 
           apps = {
@@ -131,13 +129,7 @@
 
           devShells = {
             default = craneLib.devShell {
-              # Inherit inputs from checks.
               checks = self.checks.${system};
-
-              # Additional dev-shell environment variables can be set directly
-              # MY_CUSTOM_DEVELOPMENT_VAR = "something else";
-
-              # Extra inputs can be added here; cargo and rustc are provided by default.
               packages = [
                 pkgs.git
                 pkgs.nix
@@ -145,7 +137,6 @@
                 pkgs.rust-analyzer
                 pkgs.rustfmt
               ];
-
               shellHook = ''
                 root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
                 export PATH="$root/scripts:''${PATH}"
@@ -160,9 +151,17 @@
             };
           };
         };
+
       systemOutputs = forAllSystems perSystem;
     in
     {
+      overlays.default = final: prev: {
+        mjolnix = self.packages.${final.system}.default;
+      };
+
+      nixosModules.default = ./nix/modules/mjolnix.nix;
+      nixosModules.mjolnix = self.nixosModules.default;
+
       checks = nixpkgs.lib.mapAttrs (_: o: o.checks) systemOutputs;
       packages = nixpkgs.lib.mapAttrs (_: o: o.packages) systemOutputs;
       apps = nixpkgs.lib.mapAttrs (_: o: o.apps) systemOutputs;

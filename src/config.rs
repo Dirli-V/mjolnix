@@ -49,9 +49,7 @@ impl Config {
 
         let mjolnix_bin = env::var("MJOLNIX_BIN")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                env::current_exe().unwrap_or_else(|_| PathBuf::from("mjolnix"))
-            });
+            .unwrap_or_else(|_| env::current_exe().unwrap_or_else(|_| PathBuf::from("mjolnix")));
 
         let repos_dir = data_dir.join("repos");
         let db_path = data_dir.join("mjolnix.db");
@@ -80,16 +78,13 @@ impl Config {
             &self.work_dir,
             &self.logs_dir,
         ] {
-            std::fs::create_dir_all(dir)
-                .with_context(|| format!("create {}", dir.display()))?;
+            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         }
         Ok(())
     }
 
     pub fn repo_disk_path(&self, namespace: &str, name: &str) -> PathBuf {
-        self.repos_dir
-            .join(namespace)
-            .join(format!("{name}.git"))
+        self.repos_dir.join(namespace).join(format!("{name}.git"))
     }
 
     pub fn clone_url(&self, namespace: &str, name: &str) -> String {

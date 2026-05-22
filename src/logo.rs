@@ -1,7 +1,7 @@
 use std::io::{self, IsTerminal};
 
-/// Project logo embedded at compile time from [assets/mjolnix.png](../assets/mjolnix.png).
-const LOGO_PNG: &[u8] = include_bytes!("../assets/mjolnix.png");
+/// Project logo embedded at compile time from [assets/mjolnix.png](assets/mjolnix.png).
+const LOGO_PNG: &[u8] = include_bytes!("assets/mjolnix.png");
 
 /// Display width in terminal cells (height follows image aspect ratio).
 const LOGO_WIDTH_CELLS: u32 = 28;
