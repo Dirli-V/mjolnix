@@ -5,8 +5,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
 
 use crate::auth;
 use crate::config::{self, Config};
@@ -14,10 +14,10 @@ use crate::db;
 use crate::hook;
 
 pub fn remote_git_command() -> Option<String> {
-    if let Ok(cmd) = env::var("SSH_ORIGINAL_COMMAND") {
-        if !cmd.is_empty() {
-            return Some(cmd);
-        }
+    if let Ok(cmd) = env::var("SSH_ORIGINAL_COMMAND")
+        && !cmd.is_empty()
+    {
+        return Some(cmd);
     }
 
     let mut args = env::args_os();
@@ -86,10 +86,7 @@ fn parse_git_command(command: &str) -> Result<(&'static str, &str)> {
     let (verb, arg) = command
         .split_once(char::is_whitespace)
         .context("git command missing repository argument")?;
-    let arg = arg
-        .trim()
-        .trim_matches('\'')
-        .trim_matches('"');
+    let arg = arg.trim().trim_matches('\'').trim_matches('"');
     let verb = normalize_verb(verb)?;
     Ok((verb, arg))
 }
@@ -125,7 +122,7 @@ fn exec_git_helper(verb: &str, repo_path: &Path) -> Result<()> {
     {
         use std::os::unix::process::CommandExt;
         let err = cmd.exec();
-        return Err(err).with_context(|| format!("exec {verb}"));
+        Err(err).with_context(|| format!("exec {verb}"))
     }
 
     #[cfg(not(unix))]
@@ -158,8 +155,7 @@ mod tests {
 
     #[test]
     fn parse_upload_pack() {
-        let (verb, path) =
-            parse_git_command("git-upload-pack 'public/demo.git'").unwrap();
+        let (verb, path) = parse_git_command("git-upload-pack 'public/demo.git'").unwrap();
         assert_eq!(verb, "git-upload-pack");
         assert_eq!(path, "public/demo.git");
     }

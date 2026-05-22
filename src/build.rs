@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use sqlx::sqlite::SqlitePool;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use crate::config::Config;
 use crate::db::{self, Build, Repo};
@@ -23,15 +23,12 @@ pub async fn run_build(
             .with_context(|| format!("create log dir {}", parent.display()))?;
     }
 
-    db::set_build_running(pool, build.id, &log_path.to_string_lossy())
-        .await?;
+    db::set_build_running(pool, build.id, &log_path.to_string_lossy()).await?;
 
     let repo_path = config.repo_disk_path(&repo.namespace, &repo.name);
     let work_path = config.build_work_path(build.repo_id, &build.rev);
 
-    if let Err(err) =
-        run_build_inner(config, &repo_path, &build.rev, &work_path, &log_path).await
-    {
+    if let Err(err) = run_build_inner(config, &repo_path, &build.rev, &work_path, &log_path).await {
         let summary = err.to_string();
         let _ = append_log(&log_path, &format!("\n--- build failed ---\n{summary}\n")).await;
         db::set_build_failed(pool, build.id, &truncate_summary(&summary)).await?;
@@ -40,7 +37,7 @@ pub async fn run_build(
 
     let result_link = work_path.join("result");
     let store_paths = closure_paths(&result_link).await?;
-    let _ = db::set_build_success(pool, build.id, &store_paths).await?;
+    db::set_build_success(pool, build.id, &store_paths).await?;
     Ok(())
 }
 
@@ -108,12 +105,7 @@ async fn run_build_inner(
 
 async fn materialize_rev(repo_path: &Path, rev: &str, work_path: &Path) -> Result<()> {
     let output = Command::new("git")
-        .args([
-            "--git-dir",
-            &repo_path.to_string_lossy(),
-            "archive",
-            rev,
-        ])
+        .args(["--git-dir", &repo_path.to_string_lossy(), "archive", rev])
         .stdout(Stdio::piped())
         .output()
         .await
@@ -135,7 +127,10 @@ async fn materialize_rev(repo_path: &Path, rev: &str, work_path: &Path) -> Resul
 
     let mut child = tar.spawn().context("spawn tar")?;
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(&output.stdout).await.context("write tar stdin")?;
+        stdin
+            .write_all(&output.stdout)
+            .await
+            .context("write tar stdin")?;
     }
 
     let status = child.wait().await.context("wait tar")?;

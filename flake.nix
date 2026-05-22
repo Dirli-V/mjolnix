@@ -142,6 +142,8 @@
                 pkgs.git
                 pkgs.nix
                 pkgs.harmonia
+                pkgs.rust-analyzer
+                pkgs.rustfmt
               ];
 
               shellHook = ''

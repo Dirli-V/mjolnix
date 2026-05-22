@@ -88,8 +88,7 @@ async fn create_repo_flow(config: &Config, pool: &SqlitePool, user_id: i64) -> R
     }
 
     if let Some(parent) = disk_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
 
     let status = Command::new("git")
@@ -235,10 +234,10 @@ fn print_build_detail(config: &Config, build: &Build) {
             println!("  Add to /etc/nix/nix.conf or ~/.config/nix/nix.conf:");
             println!("    extra-substituters = {url}");
             println!("    trusted-public-keys = <harmonia-public-key>");
-            if let Some(paths) = &build.store_paths {
-                if let Some(first) = paths.first() {
-                    println!("  Example: nix copy --from {url} {first}");
-                }
+            if let Some(paths) = &build.store_paths
+                && let Some(first) = paths.first()
+            {
+                println!("  Example: nix copy --from {url} {first}");
             }
         } else {
             println!();
@@ -248,8 +247,8 @@ fn print_build_detail(config: &Config, build: &Build) {
 }
 
 fn print_log_tail(log_path: &str, lines: usize) -> Result<()> {
-    let content = std::fs::read_to_string(log_path)
-        .with_context(|| format!("read log {}", log_path))?;
+    let content =
+        std::fs::read_to_string(log_path).with_context(|| format!("read log {}", log_path))?;
     let tail: Vec<_> = content.lines().collect();
     let start = tail.len().saturating_sub(lines);
     println!();
@@ -310,8 +309,6 @@ fn list_repo_tree(repo_path: &Path) -> Result<()> {
 
 fn read_line() -> Result<String> {
     let mut buf = String::new();
-    io::stdin()
-        .read_line(&mut buf)
-        .context("read stdin")?;
+    io::stdin().read_line(&mut buf).context("read stdin")?;
     Ok(buf.trim().to_string())
 }
