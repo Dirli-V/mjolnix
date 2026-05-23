@@ -141,10 +141,12 @@
                 root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
                 export PATH="$root/scripts:''${PATH}"
                 export MJOLNIX_DATA_DIR="''${MJOLNIX_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/mjolnix}"
+                export MJOLNIX_DATABASE_URL="''${MJOLNIX_DATABASE_URL:-postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix}"
                 export MJOLNIX_KEY_FINGERPRINT="''${MJOLNIX_KEY_FINGERPRINT:-dev:local}"
                 export MJOLNIX_BIN="$root/target/debug/mjolnix"
                 export MJOLNIX_SUBSTITUTER_URL="''${MJOLNIX_SUBSTITUTER_URL:-http://127.0.0.1:5000}"
-                echo "mjolnix dev: data=$MJOLNIX_DATA_DIR substituter=$MJOLNIX_SUBSTITUTER_URL"
+                echo "mjolnix dev: data=$MJOLNIX_DATA_DIR db=$MJOLNIX_DATABASE_URL"
+                echo "  docker compose up -d   local PostgreSQL"
                 echo "  run-mjolnixd   start build daemon"
                 echo "  nix run .#harmonia -- -c $PWD/harmonia-dev.toml   binary cache (optional)"
               '';

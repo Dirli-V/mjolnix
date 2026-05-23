@@ -8,6 +8,15 @@ When you connect over SSH (`ssh my-host` / `mjolnix` TUI), the logo is shown in 
 
 ## Quick start (local)
 
+PostgreSQL:
+
+```bash
+docker compose up -d
+export MJOLNIX_DATABASE_URL=postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix
+```
+
+See `.env.example` for a full local env template.
+
 ```bash
 nix develop
 cargo build
@@ -51,7 +60,8 @@ Set `MJOLNIX_SUBSTITUTER_URL` so the SSH TUI prints copy hints after successful 
 
 | Variable | Purpose |
 |----------|---------|
-| `MJOLNIX_DATA_DIR` | Database, bare repos, workdirs, socket (default: `~/.local/share/mjolnix`) |
+| `MJOLNIX_DATABASE_URL` | PostgreSQL connection URL (required) |
+| `MJOLNIX_DATA_DIR` | Bare repos, workdirs, logs, socket (default: `~/.local/share/mjolnix`) |
 | `MJOLNIX_KEY_FINGERPRINT` | SSH key identity for git/TUI |
 | `MJOLNIX_SUBSTITUTER_URL` | Binary cache URL shown in TUI |
 | `MJOLNIX_MAX_PARALLEL_BUILDS` | Daemon concurrency (default: 2) |
@@ -77,6 +87,7 @@ Set `MJOLNIX_SUBSTITUTER_URL` so the SSH TUI prints copy hints after successful 
               "ssh-ed25519 AAAA... you@laptop"
             ];
             binaryCache.enable = true; # Harmonia on port 5000
+            # Bundled PostgreSQL (peer auth as user `git`) is enabled by default.
           };
         }
       ];
@@ -91,4 +102,5 @@ Verify with `nix flake check` (runs the NixOS test).
 
 - `mjolnix` — SSH entry (git wrapper + TUI + hooks)
 - `mjolnixd` — build worker (Unix socket at `$MJOLNIX_DATA_DIR/mjolnixd.sock`)
+- **PostgreSQL** — users, SSH keys, repos, builds (`closure_paths` JSONB on success)
 - Push with `flake.nix` → `post-receive` queues a build → daemon runs `nix build`

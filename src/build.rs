@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
-use sqlx::sqlite::SqlitePool;
+use crate::db::DbPool;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
@@ -12,7 +12,7 @@ use crate::db::{self, Build, Repo};
 
 pub async fn run_build(
     config: &Config,
-    pool: &SqlitePool,
+    pool: &DbPool,
     build: &Build,
     repo: &Repo,
 ) -> Result<()> {
@@ -36,8 +36,8 @@ pub async fn run_build(
     }
 
     let result_link = work_path.join("result");
-    let store_paths = closure_paths(&result_link).await?;
-    db::set_build_success(pool, build.id, &store_paths).await?;
+    let paths = closure_paths(&result_link).await?;
+    db::set_build_success(pool, build.id, &paths).await?;
     Ok(())
 }
 

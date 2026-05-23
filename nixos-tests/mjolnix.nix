@@ -48,6 +48,8 @@ pkgs.testers.runNixOSTest {
     machine.succeed("id git")
 
     machine.succeed("grep -q 'SetEnv MJOLNIX_DATA_DIR' /etc/ssh/sshd_config")
+    machine.succeed("grep -q 'SetEnv MJOLNIX_DATABASE_URL' /etc/ssh/sshd_config")
+    machine.wait_for_unit("postgresql.service")
     machine.succeed("test -x ${package}/bin/mjolnix")
     machine.succeed("test -x ${package}/bin/mjolnixd")
     '';

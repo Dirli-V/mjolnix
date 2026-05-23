@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 pub struct Config {
     pub data_dir: PathBuf,
     pub repos_dir: PathBuf,
-    pub db_path: PathBuf,
+    pub database_url: String,
     pub work_dir: PathBuf,
     pub logs_dir: PathBuf,
     pub socket_path: PathBuf,
@@ -51,15 +51,17 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(|_| env::current_exe().unwrap_or_else(|_| PathBuf::from("mjolnix")));
 
+        let database_url = env::var("MJOLNIX_DATABASE_URL")
+            .context("set MJOLNIX_DATABASE_URL (e.g. postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix)")?;
+
         let repos_dir = data_dir.join("repos");
-        let db_path = data_dir.join("mjolnix.db");
         let work_dir = data_dir.join("work");
         let logs_dir = data_dir.join("logs");
 
         Ok(Self {
             data_dir,
             repos_dir,
-            db_path,
+            database_url,
             work_dir,
             logs_dir,
             socket_path,

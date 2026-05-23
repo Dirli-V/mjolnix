@@ -1,0 +1,24 @@
+# Local PostgreSQL for mjolnix development.
+# Start: docker compose up -d
+# URL:   postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mjolnix
+      POSTGRES_PASSWORD: mjolnix
+      POSTGRES_DB: mjolnix
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - mjolnix_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mjolnix -d mjolnix"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mjolnix_pgdata:

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use sqlx::Row;
-use sqlx::sqlite::SqlitePool;
+use crate::db::DbPool;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Semaphore, mpsc};
@@ -104,7 +104,7 @@ fn parse_request(line: &str) -> Request {
 
 async fn worker_loop(
     config: Arc<Config>,
-    pool: Arc<SqlitePool>,
+    pool: Arc<DbPool>,
     mut job_rx: mpsc::UnboundedReceiver<i64>,
     semaphore: Arc<Semaphore>,
 ) {
@@ -125,7 +125,7 @@ async fn worker_loop(
     }
 }
 
-async fn run_one_build(config: &Config, pool: &SqlitePool, build_id: i64) -> Result<()> {
+async fn run_one_build(config: &Config, pool: &DbPool, build_id: i64) -> Result<()> {
     let build = db::get_build(pool, build_id)
         .await?
         .context("build not found")?;
@@ -134,7 +134,7 @@ async fn run_one_build(config: &Config, pool: &SqlitePool, build_id: i64) -> Res
         return Ok(());
     }
 
-    let repo_row = sqlx::query("SELECT namespace, name FROM repos WHERE id = ?")
+    let repo_row = sqlx::query("SELECT namespace, name FROM repos WHERE id = $1")
         .bind(build.repo_id)
         .fetch_optional(pool)
         .await?;

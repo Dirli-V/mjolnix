@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use sqlx::Row;
-use sqlx::sqlite::SqlitePool;
+use crate::db::DbPool;
 
 use crate::auth;
 use crate::config::{self, Config};
@@ -38,7 +38,7 @@ pub fn remote_git_command() -> Option<String> {
     )
 }
 
-pub async fn run(config: &Config, pool: &SqlitePool, command: &str) -> Result<()> {
+pub async fn run(config: &Config, pool: &DbPool, command: &str) -> Result<()> {
     let (verb, repo_path) = parse_git_command(command)?;
     let (namespace, name) = config::parse_repo_path(repo_path)?;
     let user_id = auth::current_user_id(pool).await?;
@@ -137,7 +137,7 @@ fn exec_git_helper(verb: &str, repo_path: &Path) -> Result<()> {
 }
 
 /// Install post-receive hooks on all repos in the database.
-pub async fn install_hooks_all(config: &Config, pool: &SqlitePool) -> Result<()> {
+pub async fn install_hooks_all(config: &Config, pool: &DbPool) -> Result<()> {
     let rows = sqlx::query("SELECT namespace, name FROM repos")
         .fetch_all(pool)
         .await?;

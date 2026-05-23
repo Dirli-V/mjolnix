@@ -8,10 +8,22 @@
 let
   cfg = config.services.mjolnix;
 
+  # NixOS postgresql.service uses this socket directory (see nixpkgs postgresql module).
+  postgresqlSocketDir = "/run/postgresql";
+
+  databaseUrl =
+    if cfg.database.url != null then
+      cfg.database.url
+    else if cfg.database.enable then
+      "postgres:///${cfg.database.name}?host=${postgresqlSocketDir}&user=${cfg.user}"
+    else
+      throw "services.mjolnix.database.url must be set when services.mjolnix.database.enable is false";
+
   mjolnixEnv = {
     MJOLNIX_DATA_DIR = cfg.dataDir;
     MJOLNIX_HOST = cfg.host;
     MJOLNIX_BIN = "${lib.getBin cfg.package}/mjolnix";
+    MJOLNIX_DATABASE_URL = databaseUrl;
     MJOLNIX_MAX_PARALLEL_BUILDS = toString cfg.maxParallelBuilds;
     MJOLNIX_BUILD_TIMEOUT_SECS = toString cfg.buildTimeoutSecs;
   };
@@ -41,7 +53,7 @@ in
     dataDir = lib.mkOption {
       type = lib.types.path;
       default = "/var/lib/mjolnix";
-      description = "State directory for repositories, database, build workdirs, and socket.";
+      description = "State directory for repositories, build workdirs, logs, and daemon socket.";
     };
 
     host = lib.mkOption {
@@ -80,6 +92,31 @@ in
       description = "Per-build timeout in seconds.";
     };
 
+    database = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Whether to enable bundled PostgreSQL for mjolnix.";
+      };
+
+      name = lib.mkOption {
+        type = lib.types.str;
+        default = "mjolnix";
+        description = "PostgreSQL database name.";
+      };
+
+      url = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "postgres://mjolnix:secret@db.example.com/mjolnix";
+        description = ''
+          Full connection URL (MJOLNIX_DATABASE_URL). When null, peer auth is used
+          on the NixOS PostgreSQL socket as {option}`services.mjolnix.user` against
+          {option}`services.mjolnix.database.name`.
+        '';
+      };
+    };
+
     openssh.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -111,6 +148,21 @@ in
       }
     ];
 
+    services.postgresql = lib.mkIf cfg.database.enable {
+      enable = true;
+      ensureDatabases = [ cfg.database.name ];
+      ensureUsers = [
+        {
+          name = cfg.user;
+          ensureDBOwnership = false;
+        }
+      ];
+      # `ensureDatabases` creates the DB as the superuser; hand ownership to the git user for peer auth + migrations.
+      initialScript = pkgs.writeText "mjolnix-postgresql-init.sql" ''
+        ALTER DATABASE ${cfg.database.name} OWNER TO ${cfg.user};
+      '';
+    };
+
     services.openssh = {
       enable = lib.mkIf cfg.openssh.enable (lib.mkDefault true);
       extraConfig = lib.mkAfter ''
@@ -118,6 +170,7 @@ in
           SetEnv MJOLNIX_DATA_DIR=${cfg.dataDir}
           SetEnv MJOLNIX_HOST=${cfg.host}
           SetEnv MJOLNIX_BIN=${cfg.package}/bin/mjolnix
+          SetEnv MJOLNIX_DATABASE_URL=${databaseUrl}
           SetEnv MJOLNIX_MAX_PARALLEL_BUILDS=${toString cfg.maxParallelBuilds}
           SetEnv MJOLNIX_BUILD_TIMEOUT_SECS=${toString cfg.buildTimeoutSecs}
           ${lib.optionalString (substituterUrl != null) "SetEnv MJOLNIX_SUBSTITUTER_URL=${substituterUrl}"}
@@ -148,7 +201,8 @@ in
     systemd.services.mjolnixd = {
       description = "mjolnix Nix build daemon";
       wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
+      after = lib.optionals cfg.database.enable [ "postgresql.service" ] ++ [ "network.target" ];
+      requires = lib.optionals cfg.database.enable [ "postgresql.service" ];
       wants = [ "network.target" ];
 
       environment = mjolnixEnv // lib.optionalAttrs (substituterUrl != null) {
@@ -162,7 +216,6 @@ in
         ExecStart = "${lib.getBin cfg.package}/bin/mjolnixd";
         Restart = "on-failure";
         RestartSec = "5s";
-        # git + nix for builds triggered by the daemon
         Path = with pkgs; [
           git
           nix

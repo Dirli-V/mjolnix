@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use sqlx::sqlite::SqlitePool;
+use crate::db::DbPool;
 
 use crate::auth;
 use crate::config::{self, Config};
@@ -11,7 +11,7 @@ use crate::db::{self, Build, BuildStatus, Repo};
 use crate::hook;
 use crate::logo;
 
-pub async fn run(config: &Config, pool: &SqlitePool) -> Result<()> {
+pub async fn run(config: &Config, pool: &DbPool) -> Result<()> {
     logo::show_welcome_logo();
 
     let user_id = auth::current_user_id(pool).await?;
@@ -73,7 +73,7 @@ pub async fn run(config: &Config, pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-async fn create_repo_flow(config: &Config, pool: &SqlitePool, user_id: i64) -> Result<()> {
+async fn create_repo_flow(config: &Config, pool: &DbPool, user_id: i64) -> Result<()> {
     println!();
     print!("Repository name: ");
     io::stdout().flush()?;
@@ -111,7 +111,7 @@ async fn create_repo_flow(config: &Config, pool: &SqlitePool, user_id: i64) -> R
     Ok(())
 }
 
-async fn browse_repo(config: &Config, pool: &SqlitePool, repo: &Repo) -> Result<()> {
+async fn browse_repo(config: &Config, pool: &DbPool, repo: &Repo) -> Result<()> {
     let disk_path = config.repo_disk_path(&repo.namespace, &repo.name);
     loop {
         println!();
@@ -140,7 +140,7 @@ async fn browse_repo(config: &Config, pool: &SqlitePool, repo: &Repo) -> Result<
     Ok(())
 }
 
-async fn show_latest_build(config: &Config, pool: &SqlitePool, repo: &Repo) -> Result<()> {
+async fn show_latest_build(config: &Config, pool: &DbPool, repo: &Repo) -> Result<()> {
     let Some(build) = db::latest_build_for_repo(pool, repo.id).await? else {
         println!("No builds yet.");
         return Ok(());
@@ -149,7 +149,7 @@ async fn show_latest_build(config: &Config, pool: &SqlitePool, repo: &Repo) -> R
     Ok(())
 }
 
-async fn show_build_history(config: &Config, pool: &SqlitePool, repo: &Repo) -> Result<()> {
+async fn show_build_history(config: &Config, pool: &DbPool, repo: &Repo) -> Result<()> {
     let builds = db::list_builds_for_repo(pool, repo.id, 20).await?;
     if builds.is_empty() {
         println!("No builds yet.");
@@ -219,7 +219,7 @@ fn print_build_detail(config: &Config, build: &Build) {
         println!("  error:    {err}");
     }
     if build.status == BuildStatus::Success {
-        if let Some(paths) = &build.store_paths {
+        if let Some(paths) = &build.closure_paths {
             println!("  outputs:");
             for p in paths.iter().take(5) {
                 println!("    {p}");
@@ -234,7 +234,7 @@ fn print_build_detail(config: &Config, build: &Build) {
             println!("  Add to /etc/nix/nix.conf or ~/.config/nix/nix.conf:");
             println!("    extra-substituters = {url}");
             println!("    trusted-public-keys = <harmonia-public-key>");
-            if let Some(paths) = &build.store_paths
+            if let Some(paths) = &build.closure_paths
                 && let Some(first) = paths.first()
             {
                 println!("  Example: nix copy --from {url} {first}");

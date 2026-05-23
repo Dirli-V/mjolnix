@@ -1,12 +1,12 @@
 use std::env;
 
 use anyhow::{Context, Result, bail};
-use sqlx::sqlite::SqlitePool;
+use crate::db::DbPool;
 
 use crate::db;
 
 /// Resolve the application user for this session.
-pub async fn current_user_id(pool: &SqlitePool) -> Result<i64> {
+pub async fn current_user_id(pool: &DbPool) -> Result<i64> {
     if let Ok(id) = env::var("MJOLNIX_USER_ID") {
         return id
             .parse()

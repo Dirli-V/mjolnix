@@ -1,8 +1,12 @@
 use anyhow::{Context, Result};
-use sqlx::Row;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use chrono::{DateTime, Utc};
+use sqlx::postgres::{PgPoolOptions, PgRow};
+use sqlx::{PgPool, Row};
+use sqlx::types::Json;
 
 use crate::config::Config;
+
+pub type DbPool = PgPool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildStatus {
@@ -51,91 +55,44 @@ pub struct Build {
     pub ref_name: String,
     pub status: BuildStatus,
     pub flake_attr: Option<String>,
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
     pub log_path: Option<String>,
     pub error_summary: Option<String>,
-    pub store_paths: Option<Vec<String>>,
-    pub created_at: String,
+    pub closure_paths: Option<Vec<String>>,
+    pub created_at: DateTime<Utc>,
 }
 
-pub async fn connect(config: &Config) -> Result<SqlitePool> {
-    let options = SqliteConnectOptions::new()
-        .filename(&config.db_path)
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal);
-
-    SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(options)
+pub async fn connect(config: &Config) -> Result<DbPool> {
+    PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&config.database_url)
         .await
-        .with_context(|| format!("connect to {}", config.db_path.display()))
+        .context("connect to PostgreSQL (check MJOLNIX_DATABASE_URL)")
 }
 
-pub async fn migrate(pool: &SqlitePool) -> Result<()> {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS ssh_keys (
-            fingerprint TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL REFERENCES users(id),
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS repos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL REFERENCES users(id),
-            namespace TEXT NOT NULL DEFAULT 'public',
-            name TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(namespace, name)
-        );
-
-        CREATE TABLE IF NOT EXISTS builds (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            repo_id INTEGER NOT NULL REFERENCES repos(id),
-            rev TEXT NOT NULL,
-            ref_name TEXT NOT NULL,
-            status TEXT NOT NULL,
-            flake_attr TEXT,
-            started_at TEXT,
-            finished_at TEXT,
-            log_path TEXT,
-            error_summary TEXT,
-            store_paths TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_builds_repo_created ON builds(repo_id, created_at DESC);
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
+pub async fn migrate(pool: &DbPool) -> Result<()> {
+    sqlx::migrate!().run(pool).await?;
     Ok(())
 }
 
-pub async fn create_user(pool: &SqlitePool) -> Result<i64> {
-    let result = sqlx::query("INSERT INTO users DEFAULT VALUES")
-        .execute(pool)
-        .await?;
-    Ok(result.last_insert_rowid())
+pub async fn create_user(pool: &DbPool) -> Result<i64> {
+    sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
 }
 
-pub async fn user_id_for_fingerprint(pool: &SqlitePool, fingerprint: &str) -> Result<Option<i64>> {
-    let row = sqlx::query("SELECT user_id FROM ssh_keys WHERE fingerprint = ?")
+pub async fn user_id_for_fingerprint(pool: &DbPool, fingerprint: &str) -> Result<Option<i64>> {
+    let row = sqlx::query("SELECT user_id FROM ssh_keys WHERE fingerprint = $1")
         .bind(fingerprint)
         .fetch_optional(pool)
         .await?;
     Ok(row.map(|r| r.get("user_id")))
 }
 
-pub async fn attach_key(pool: &SqlitePool, fingerprint: &str, user_id: i64) -> Result<()> {
-    sqlx::query("INSERT INTO ssh_keys (fingerprint, user_id) VALUES (?, ?)")
+pub async fn attach_key(pool: &DbPool, fingerprint: &str, user_id: i64) -> Result<()> {
+    sqlx::query("INSERT INTO ssh_keys (fingerprint, user_id) VALUES ($1, $2)")
         .bind(fingerprint)
         .bind(user_id)
         .execute(pool)
@@ -143,7 +100,7 @@ pub async fn attach_key(pool: &SqlitePool, fingerprint: &str, user_id: i64) -> R
     Ok(())
 }
 
-pub async fn get_or_create_dev_user(pool: &SqlitePool) -> Result<i64> {
+pub async fn get_or_create_dev_user(pool: &DbPool) -> Result<i64> {
     const DEV_FINGERPRINT: &str = "dev:local";
 
     if let Some(id) = user_id_for_fingerprint(pool, DEV_FINGERPRINT).await? {
@@ -155,9 +112,9 @@ pub async fn get_or_create_dev_user(pool: &SqlitePool) -> Result<i64> {
     Ok(user_id)
 }
 
-pub async fn list_repos_for_user(pool: &SqlitePool, user_id: i64) -> Result<Vec<Repo>> {
+pub async fn list_repos_for_user(pool: &DbPool, user_id: i64) -> Result<Vec<Repo>> {
     let rows = sqlx::query(
-        "SELECT id, namespace, name FROM repos WHERE user_id = ? ORDER BY namespace, name",
+        "SELECT id, namespace, name FROM repos WHERE user_id = $1 ORDER BY namespace, name",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -173,8 +130,8 @@ pub async fn list_repos_for_user(pool: &SqlitePool, user_id: i64) -> Result<Vec<
         .collect())
 }
 
-pub async fn get_repo(pool: &SqlitePool, namespace: &str, name: &str) -> Result<Option<Repo>> {
-    let row = sqlx::query("SELECT id, namespace, name FROM repos WHERE namespace = ? AND name = ?")
+pub async fn get_repo(pool: &DbPool, namespace: &str, name: &str) -> Result<Option<Repo>> {
+    let row = sqlx::query("SELECT id, namespace, name FROM repos WHERE namespace = $1 AND name = $2")
         .bind(namespace)
         .bind(name)
         .fetch_optional(pool)
@@ -187,57 +144,56 @@ pub async fn get_repo(pool: &SqlitePool, namespace: &str, name: &str) -> Result<
     }))
 }
 
-pub async fn create_repo(
-    pool: &SqlitePool,
-    user_id: i64,
-    namespace: &str,
-    name: &str,
-) -> Result<i64> {
-    let result = sqlx::query("INSERT INTO repos (user_id, namespace, name) VALUES (?, ?, ?)")
-        .bind(user_id)
-        .bind(namespace)
-        .bind(name)
-        .execute(pool)
-        .await?;
-    Ok(result.last_insert_rowid())
+pub async fn create_repo(pool: &DbPool, user_id: i64, namespace: &str, name: &str) -> Result<i64> {
+    sqlx::query_scalar(
+        "INSERT INTO repos (user_id, namespace, name) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(user_id)
+    .bind(namespace)
+    .bind(name)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
 }
 
 pub async fn user_owns_repo(
-    pool: &SqlitePool,
+    pool: &DbPool,
     user_id: i64,
     namespace: &str,
     name: &str,
 ) -> Result<bool> {
-    let row =
-        sqlx::query("SELECT 1 AS ok FROM repos WHERE user_id = ? AND namespace = ? AND name = ?")
-            .bind(user_id)
-            .bind(namespace)
-            .bind(name)
-            .fetch_optional(pool)
-            .await?;
+    let row = sqlx::query(
+        "SELECT 1 AS ok FROM repos WHERE user_id = $1 AND namespace = $2 AND name = $3",
+    )
+    .bind(user_id)
+    .bind(namespace)
+    .bind(name)
+    .fetch_optional(pool)
+    .await?;
     Ok(row.is_some())
 }
 
 pub async fn insert_build_queued(
-    pool: &SqlitePool,
+    pool: &DbPool,
     repo_id: i64,
     rev: &str,
     ref_name: &str,
 ) -> Result<i64> {
-    let result =
-        sqlx::query("INSERT INTO builds (repo_id, rev, ref_name, status) VALUES (?, ?, ?, ?)")
-            .bind(repo_id)
-            .bind(rev)
-            .bind(ref_name)
-            .bind(BuildStatus::Queued.as_str())
-            .execute(pool)
-            .await?;
-    Ok(result.last_insert_rowid())
+    sqlx::query_scalar(
+        "INSERT INTO builds (repo_id, rev, ref_name, status) VALUES ($1, $2, $3, $4) RETURNING id",
+    )
+    .bind(repo_id)
+    .bind(rev)
+    .bind(ref_name)
+    .bind(BuildStatus::Queued.as_str())
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
 }
 
-pub async fn set_build_running(pool: &SqlitePool, build_id: i64, log_path: &str) -> Result<()> {
+pub async fn set_build_running(pool: &DbPool, build_id: i64, log_path: &str) -> Result<()> {
     sqlx::query(
-        "UPDATE builds SET status = ?, started_at = datetime('now'), log_path = ? WHERE id = ?",
+        "UPDATE builds SET status = $1, started_at = NOW(), log_path = $2 WHERE id = $3",
     )
     .bind(BuildStatus::Running.as_str())
     .bind(log_path)
@@ -248,25 +204,25 @@ pub async fn set_build_running(pool: &SqlitePool, build_id: i64, log_path: &str)
 }
 
 pub async fn set_build_success(
-    pool: &SqlitePool,
+    pool: &DbPool,
     build_id: i64,
-    store_paths: &[String],
+    closure_paths: &[String],
 ) -> Result<()> {
-    let paths_json = serde_json::to_string(store_paths)?;
+    let paths = Json(closure_paths.to_vec());
     sqlx::query(
-        "UPDATE builds SET status = ?, finished_at = datetime('now'), store_paths = ?, error_summary = NULL WHERE id = ?",
+        "UPDATE builds SET status = $1, finished_at = NOW(), closure_paths = $2, error_summary = NULL WHERE id = $3",
     )
     .bind(BuildStatus::Success.as_str())
-    .bind(paths_json)
+    .bind(paths)
     .bind(build_id)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-pub async fn set_build_failed(pool: &SqlitePool, build_id: i64, error_summary: &str) -> Result<()> {
+pub async fn set_build_failed(pool: &DbPool, build_id: i64, error_summary: &str) -> Result<()> {
     sqlx::query(
-        "UPDATE builds SET status = ?, finished_at = datetime('now'), error_summary = ? WHERE id = ?",
+        "UPDATE builds SET status = $1, finished_at = NOW(), error_summary = $2 WHERE id = $3",
     )
     .bind(BuildStatus::Failed.as_str())
     .bind(error_summary)
@@ -276,48 +232,46 @@ pub async fn set_build_failed(pool: &SqlitePool, build_id: i64, error_summary: &
     Ok(())
 }
 
-pub async fn get_build(pool: &SqlitePool, build_id: i64) -> Result<Option<Build>> {
-    let row = sqlx::query("SELECT * FROM builds WHERE id = ?")
+pub async fn get_build(pool: &DbPool, build_id: i64) -> Result<Option<Build>> {
+    let row = sqlx::query("SELECT * FROM builds WHERE id = $1")
         .bind(build_id)
         .fetch_optional(pool)
         .await?;
     Ok(row.map(|r| row_to_build(&r)))
 }
 
-pub async fn latest_build_for_repo(pool: &SqlitePool, repo_id: i64) -> Result<Option<Build>> {
-    let row =
-        sqlx::query("SELECT * FROM builds WHERE repo_id = ? ORDER BY created_at DESC LIMIT 1")
-            .bind(repo_id)
-            .fetch_optional(pool)
-            .await?;
+pub async fn latest_build_for_repo(pool: &DbPool, repo_id: i64) -> Result<Option<Build>> {
+    let row = sqlx::query(
+        "SELECT * FROM builds WHERE repo_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(repo_id)
+    .fetch_optional(pool)
+    .await?;
     Ok(row.map(|r| row_to_build(&r)))
 }
 
-pub async fn list_builds_for_repo(
-    pool: &SqlitePool,
-    repo_id: i64,
-    limit: i64,
-) -> Result<Vec<Build>> {
-    let rows =
-        sqlx::query("SELECT * FROM builds WHERE repo_id = ? ORDER BY created_at DESC LIMIT ?")
-            .bind(repo_id)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?;
+pub async fn list_builds_for_repo(pool: &DbPool, repo_id: i64, limit: i64) -> Result<Vec<Build>> {
+    let rows = sqlx::query(
+        "SELECT * FROM builds WHERE repo_id = $1 ORDER BY created_at DESC LIMIT $2",
+    )
+    .bind(repo_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
     Ok(rows.iter().map(row_to_build).collect())
 }
 
-pub async fn list_queued_build_ids(pool: &SqlitePool) -> Result<Vec<i64>> {
-    let rows = sqlx::query("SELECT id FROM builds WHERE status = ? ORDER BY created_at ASC")
+pub async fn list_queued_build_ids(pool: &DbPool) -> Result<Vec<i64>> {
+    let rows = sqlx::query("SELECT id FROM builds WHERE status = $1 ORDER BY created_at ASC")
         .bind(BuildStatus::Queued.as_str())
         .fetch_all(pool)
         .await?;
     Ok(rows.into_iter().map(|r| r.get("id")).collect())
 }
 
-pub async fn recover_stale_running_builds(pool: &SqlitePool) -> Result<u64> {
+pub async fn recover_stale_running_builds(pool: &DbPool) -> Result<u64> {
     let result = sqlx::query(
-        "UPDATE builds SET status = ?, finished_at = datetime('now'), error_summary = 'daemon restarted' WHERE status = ?",
+        "UPDATE builds SET status = $1, finished_at = NOW(), error_summary = 'daemon restarted' WHERE status = $2",
     )
     .bind(BuildStatus::Failed.as_str())
     .bind(BuildStatus::Running.as_str())
@@ -326,9 +280,9 @@ pub async fn recover_stale_running_builds(pool: &SqlitePool) -> Result<u64> {
     Ok(result.rows_affected())
 }
 
-fn row_to_build(r: &sqlx::sqlite::SqliteRow) -> Build {
+fn row_to_build(r: &PgRow) -> Build {
     let status: String = r.get("status");
-    let store_paths: Option<String> = r.get("store_paths");
+    let closure_paths: Option<Json<Vec<String>>> = r.get("closure_paths");
     Build {
         id: r.get("id"),
         repo_id: r.get("repo_id"),
@@ -340,7 +294,7 @@ fn row_to_build(r: &sqlx::sqlite::SqliteRow) -> Build {
         finished_at: r.get("finished_at"),
         log_path: r.get("log_path"),
         error_summary: r.get("error_summary"),
-        store_paths: store_paths.and_then(|j| serde_json::from_str(&j).ok()),
+        closure_paths: closure_paths.map(|j| j.0),
         created_at: r.get("created_at"),
     }
 }

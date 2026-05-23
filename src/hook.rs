@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::SqlitePool;
+use crate::db::DbPool;
 
 use crate::config::Config;
 use crate::daemon;
@@ -54,7 +54,7 @@ pub fn repo_has_flake(repo_path: &Path, rev: &str) -> Result<bool> {
 
 pub async fn hook_post_receive(
     config: &Config,
-    pool: &SqlitePool,
+    pool: &DbPool,
     namespace: &str,
     name: &str,
     old: &str,
