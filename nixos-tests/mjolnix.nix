@@ -25,7 +25,8 @@ pkgs.testers.runNixOSTest {
       enable = true;
       inherit package;
       host = "mjolnix-test";
-      binaryCache.enable = false;
+      binaryCache.enable = true;
+      binaryCache.bind = "0.0.0.0:5000";
       authorizedKeys = [
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRlc3Qta2V5IGZvciBuaXhvcy10ZXN0IG9ubHk="
       ];
@@ -41,10 +42,12 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     machine.wait_for_unit("mjolnixd.service")
+    machine.wait_for_open_port(5000)
     machine.wait_for_open_port(22)
 
     machine.succeed("test -S /var/lib/mjolnix/mjolnixd.sock")
     machine.succeed("test -d /var/lib/mjolnix/repos")
+    machine.succeed("test -d /var/lib/mjolnix/stores")
     machine.succeed("id git")
 
     machine.succeed("grep -q 'SetEnv MJOLNIX_DATA_DIR' /etc/ssh/sshd_config")

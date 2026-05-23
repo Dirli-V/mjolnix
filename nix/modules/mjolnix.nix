@@ -28,12 +28,6 @@ let
     MJOLNIX_BUILD_TIMEOUT_SECS = toString cfg.buildTimeoutSecs;
   };
 
-  substituterUrl =
-    if cfg.binaryCache.enable then
-      "http://${cfg.host}:${toString cfg.binaryCache.port}/"
-    else
-      null;
-
   mjolnixLoginShell = pkgs.writeScriptBin "mjolnix-login" ''
     #!${pkgs.runtimeShell}
     exec ${cfg.package}/bin/mjolnix
@@ -124,18 +118,30 @@ in
     };
 
     binaryCache = {
-      enable = lib.mkEnableOption "Harmonia binary cache for build outputs";
+      enable = lib.mkEnableOption "per-repo HTTP binary cache (served by mjolnixd)";
 
       port = lib.mkOption {
         type = lib.types.port;
         default = 5000;
-        description = "TCP port for Harmonia.";
+        description = "TCP port for the binary cache HTTP listener.";
+      };
+
+      bind = lib.mkOption {
+        type = lib.types.str;
+        default = "0.0.0.0:5000";
+        description = "Socket address for mjolnixd to bind the cache (MJOLNIX_CACHE_BIND).";
       };
 
       signKeyPath = lib.mkOption {
         type = lib.types.nullOr lib.types.path;
         default = null;
-        description = "Optional path to Harmonia signing key.";
+        description = "Path to the binary cache signing secret key (generated on first start if missing).";
+      };
+
+      keyName = lib.mkOption {
+        type = lib.types.str;
+        default = "${cfg.host}-1";
+        description = "Key name embedded in trusted-public-keys (MJOLNIX_CACHE_KEY_NAME).";
       };
     };
   };
@@ -173,7 +179,6 @@ in
           SetEnv MJOLNIX_DATABASE_URL=${databaseUrl}
           SetEnv MJOLNIX_MAX_PARALLEL_BUILDS=${toString cfg.maxParallelBuilds}
           SetEnv MJOLNIX_BUILD_TIMEOUT_SECS=${toString cfg.buildTimeoutSecs}
-          ${lib.optionalString (substituterUrl != null) "SetEnv MJOLNIX_SUBSTITUTER_URL=${substituterUrl}"}
       '';
     };
 
@@ -195,6 +200,7 @@ in
       "d ${cfg.dataDir}/repos 0750 ${cfg.user} ${cfg.group} -"
       "d ${cfg.dataDir}/work 0750 ${cfg.user} ${cfg.group} -"
       "d ${cfg.dataDir}/logs 0750 ${cfg.user} ${cfg.group} -"
+      "d ${cfg.dataDir}/stores 0750 ${cfg.user} ${cfg.group} -"
       "Z ${cfg.dataDir} - ${cfg.user} ${cfg.group} -"
     ];
 
@@ -205,8 +211,14 @@ in
       requires = lib.optionals cfg.database.enable [ "postgresql.service" ];
       wants = [ "network.target" ];
 
-      environment = mjolnixEnv // lib.optionalAttrs (substituterUrl != null) {
-        MJOLNIX_SUBSTITUTER_URL = substituterUrl;
+      environment = mjolnixEnv // lib.optionalAttrs cfg.binaryCache.enable {
+        MJOLNIX_CACHE_ENABLE = "1";
+        MJOLNIX_CACHE_BIND = cfg.binaryCache.bind;
+        MJOLNIX_CACHE_HOST = cfg.host;
+        MJOLNIX_CACHE_PORT = toString cfg.binaryCache.port;
+        MJOLNIX_CACHE_KEY_NAME = cfg.binaryCache.keyName;
+      } // lib.optionalAttrs (cfg.binaryCache.signKeyPath != null) {
+        MJOLNIX_CACHE_SIGN_KEY_PATH = toString cfg.binaryCache.signKeyPath;
       };
 
       serviceConfig = {
@@ -220,17 +232,14 @@ in
           git
           nix
           coreutils
+          xz
         ];
       };
     };
 
-    services.harmonia = lib.mkIf cfg.binaryCache.enable {
-      enable = true;
-      signKeyPath = cfg.binaryCache.signKeyPath;
-      settings = {
-        bind = [ "[::]:${toString cfg.binaryCache.port}" ];
-        workers = 2;
-      };
+    # Per-repo substituters are http://HOST:PORT/r/NAMESPACE/NAME (see repo_stores).
+    nix.settings = lib.mkIf cfg.binaryCache.enable {
+      trusted-users = lib.mkAfter [ cfg.user ];
     };
   };
 }

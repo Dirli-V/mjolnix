@@ -4,9 +4,9 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::db::DbPool;
 use anyhow::{Context, Result, bail};
 use sqlx::Row;
-use crate::db::DbPool;
 
 use crate::auth;
 use crate::config::{self, Config};

@@ -90,7 +90,7 @@ Usage:
 Environment:
   MJOLNIX_DATABASE_URL            PostgreSQL connection URL (required)
   MJOLNIX_DATA_DIR, MJOLNIX_HOST, MJOLNIX_KEY_FINGERPRINT, MJOLNIX_USER_ID
-  MJOLNIX_SUBSTITUTER_URL         binary cache URL shown after successful builds
+  MJOLNIX_CACHE_*                 per-repo binary cache (see README)
 "#
     );
 }

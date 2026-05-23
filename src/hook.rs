@@ -2,8 +2,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use crate::db::DbPool;
+use anyhow::{Context, Result};
 
 use crate::config::Config;
 use crate::daemon;

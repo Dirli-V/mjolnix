@@ -1,9 +1,12 @@
 pub mod auth;
 pub mod build;
+pub mod cache;
 pub mod config;
 pub mod daemon;
 pub mod db;
 pub mod git;
 pub mod hook;
 pub mod logo;
+pub mod signing;
+pub mod store;
 pub mod tui;

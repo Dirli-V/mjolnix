@@ -12,7 +12,13 @@ pub struct Config {
     pub logs_dir: PathBuf,
     pub socket_path: PathBuf,
     pub host: String,
-    pub substituter_url: Option<String>,
+    pub stores_dir: PathBuf,
+    pub cache_enable: bool,
+    pub cache_bind: String,
+    pub cache_host: String,
+    pub cache_port: u16,
+    pub cache_sign_key_path: PathBuf,
+    pub cache_key_name: String,
     pub max_parallel_builds: usize,
     pub build_timeout_secs: u64,
     /// Path to mjolnix binary for hook scripts.
@@ -31,7 +37,24 @@ impl Config {
             .context("set MJOLNIX_DATA_DIR or use a standard home directory layout")?;
 
         let host = env::var("MJOLNIX_HOST").unwrap_or_else(|_| "localhost".into());
-        let substituter_url = env::var("MJOLNIX_SUBSTITUTER_URL").ok();
+
+        let cache_enable = env::var("MJOLNIX_CACHE_ENABLE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(true);
+
+        let cache_bind = env::var("MJOLNIX_CACHE_BIND").unwrap_or_else(|_| "0.0.0.0:5000".into());
+        let cache_host = env::var("MJOLNIX_CACHE_HOST").unwrap_or_else(|_| host.clone());
+        let cache_port = env::var("MJOLNIX_CACHE_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5000);
+
+        let cache_sign_key_path = env::var("MJOLNIX_CACHE_SIGN_KEY_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| data_dir.join("cache-secret-key"));
+
+        let cache_key_name =
+            env::var("MJOLNIX_CACHE_KEY_NAME").unwrap_or_else(|_| format!("{host}-1"));
 
         let max_parallel_builds = env::var("MJOLNIX_MAX_PARALLEL_BUILDS")
             .ok()
@@ -51,10 +74,14 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(|_| env::current_exe().unwrap_or_else(|_| PathBuf::from("mjolnix")));
 
-        let database_url = env::var("MJOLNIX_DATABASE_URL")
-            .context("set MJOLNIX_DATABASE_URL (e.g. postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix)")?;
+        let database_url = env::var("MJOLNIX_DATABASE_URL").context(
+            "set MJOLNIX_DATABASE_URL (e.g. postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix)",
+        )?;
 
         let repos_dir = data_dir.join("repos");
+        let stores_dir = env::var("MJOLNIX_STORES_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| data_dir.join("stores"));
         let work_dir = data_dir.join("work");
         let logs_dir = data_dir.join("logs");
 
@@ -64,9 +91,15 @@ impl Config {
             database_url,
             work_dir,
             logs_dir,
+            stores_dir,
             socket_path,
             host,
-            substituter_url,
+            cache_enable,
+            cache_bind,
+            cache_host,
+            cache_port,
+            cache_sign_key_path,
+            cache_key_name,
             max_parallel_builds,
             build_timeout_secs,
             mjolnix_bin,
@@ -77,6 +110,7 @@ impl Config {
         for dir in [
             &self.data_dir,
             &self.repos_dir,
+            &self.stores_dir,
             &self.work_dir,
             &self.logs_dir,
         ] {

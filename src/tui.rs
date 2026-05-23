@@ -2,14 +2,15 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
 use crate::db::DbPool;
+use anyhow::{Context, Result, bail};
 
 use crate::auth;
 use crate::config::{self, Config};
-use crate::db::{self, Build, BuildStatus, Repo};
+use crate::db::{self, Build, BuildStatus, Repo, RepoStore};
 use crate::hook;
 use crate::logo;
+use crate::store;
 
 pub async fn run(config: &Config, pool: &DbPool) -> Result<()> {
     logo::show_welcome_logo();
@@ -99,13 +100,17 @@ async fn create_repo_flow(config: &Config, pool: &DbPool, user_id: i64) -> Resul
         bail!("git init --bare failed");
     }
 
-    db::create_repo(pool, user_id, NAMESPACE, &name).await?;
+    let (uid, gid) = store::process_uid_gid();
+    let repo_id = db::create_repo(pool, config, user_id, NAMESPACE, &name, uid, gid).await?;
     hook::install_post_receive_hook(config, NAMESPACE, &name)?;
 
     println!();
     println!("Created {NAMESPACE}/{name}");
     println!("Clone with:");
     println!("  git clone {}", config.clone_url(NAMESPACE, &name));
+    if let Some(repo_store) = db::get_repo_store(pool, repo_id).await? {
+        print_repo_cache_hints(config, &repo_store);
+    }
     println!();
     println!("Start mjolnixd to build flakes on push: mjolnixd");
     Ok(())
@@ -116,6 +121,9 @@ async fn browse_repo(config: &Config, pool: &DbPool, repo: &Repo) -> Result<()> 
     loop {
         println!();
         println!("{}/{}", repo.namespace, repo.name);
+        if let Some(repo_store) = db::get_repo_store(pool, repo.id).await? {
+            print_repo_cache_hints(config, &repo_store);
+        }
         if let Some(build) = db::latest_build_for_repo(pool, repo.id).await? {
             print_build_summary(&build);
         } else {
@@ -145,7 +153,7 @@ async fn show_latest_build(config: &Config, pool: &DbPool, repo: &Repo) -> Resul
         println!("No builds yet.");
         return Ok(());
     };
-    print_build_detail(config, &build);
+    print_build_detail(config, pool, repo.id, &build).await;
     Ok(())
 }
 
@@ -185,7 +193,7 @@ async fn show_build_history(config: &Config, pool: &DbPool, repo: &Repo) -> Resu
             println!("Invalid choice.");
             continue;
         };
-        print_build_detail(config, build);
+        print_build_detail(config, pool, repo.id, build).await;
         if let Some(path) = &build.log_path {
             print_log_tail(path, 50)?;
         }
@@ -202,7 +210,7 @@ fn print_build_summary(build: &Build) {
     );
 }
 
-fn print_build_detail(config: &Config, build: &Build) {
+async fn print_build_detail(config: &Config, pool: &DbPool, repo_id: i64, build: &Build) {
     println!();
     println!("Build #{}", build.id);
     println!("  rev:      {}", build.rev);
@@ -228,21 +236,30 @@ fn print_build_detail(config: &Config, build: &Build) {
                 println!("    … and {} more paths in closure", paths.len() - 5);
             }
         }
-        if let Some(url) = &config.substituter_url {
-            println!();
-            println!("  Binary cache: {url}");
-            println!("  Add to /etc/nix/nix.conf or ~/.config/nix/nix.conf:");
-            println!("    extra-substituters = {url}");
-            println!("    trusted-public-keys = <harmonia-public-key>");
+        if let Ok(Some(repo_store)) = db::get_repo_store(pool, repo_id).await {
+            print_repo_cache_hints(config, &repo_store);
             if let Some(paths) = &build.closure_paths
                 && let Some(first) = paths.first()
             {
-                println!("  Example: nix copy --from {url} {first}");
+                println!("  Example: nix copy --from {} {first}", repo_store.substituter_url);
             }
-        } else {
-            println!();
-            println!("  Set MJOLNIX_SUBSTITUTER_URL to show substituter hints.");
         }
+    }
+}
+
+fn print_repo_cache_hints(config: &Config, repo_store: &RepoStore) {
+    println!();
+    if !config.cache_enable {
+        println!("  Binary cache is disabled (MJOLNIX_CACHE_ENABLE=0).");
+        println!("  Per-repo substituter URL (when cache is enabled):");
+    } else {
+        println!("  Binary cache: {}", repo_store.substituter_url);
+    }
+    println!("  Add to /etc/nix/nix.conf or ~/.config/nix/nix.conf:");
+    println!("    extra-substituters = {}", repo_store.substituter_url);
+    match &repo_store.cache_public_key {
+        Some(pk) => println!("    trusted-public-keys = {pk}"),
+        None => println!("    trusted-public-keys = <unavailable — enable cache and ensure nix is installed>"),
     }
 }
 

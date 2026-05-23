@@ -1,15 +1,18 @@
 use std::sync::Arc;
 
+use crate::db::DbPool;
 use anyhow::{Context, Result, bail};
 use sqlx::Row;
-use crate::db::DbPool;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Semaphore, mpsc};
 
 use crate::build;
+use crate::cache;
 use crate::config::Config;
 use crate::db;
+use crate::signing;
+use crate::store;
 
 pub async fn run(config: Config) -> Result<()> {
     config.ensure_dirs()?;
@@ -17,9 +20,31 @@ pub async fn run(config: Config) -> Result<()> {
     let pool = db::connect(&config).await?;
     db::migrate(&pool).await?;
 
+    let (uid, gid) = store::process_uid_gid();
+    backfill_repo_stores(&pool, &config, uid, gid).await?;
+
     let recovered = db::recover_stale_running_builds(&pool).await?;
     if recovered > 0 {
         eprintln!("mjolnixd: marked {recovered} stale running build(s) as failed");
+    }
+
+    let pool = Arc::new(pool);
+    let config = Arc::new(config);
+
+    if config.cache_enable {
+        signing::publish_cache_public_keys(config.as_ref(), pool.as_ref()).await?;
+        let signing_key =
+            signing::load_or_create_secret_key(&config.cache_sign_key_path, &config.cache_key_name)
+                .await?;
+
+        let cache_config = Arc::clone(&config);
+        let cache_pool = pool.as_ref().clone();
+        let key = signing_key.clone();
+        tokio::spawn(async move {
+            if let Err(err) = cache::run_server(cache_config, cache_pool, key).await {
+                eprintln!("mjolnix-cache: {err:#}");
+            }
+        });
     }
 
     if config.socket_path.exists() {
@@ -36,8 +61,6 @@ pub async fn run(config: Config) -> Result<()> {
     );
 
     let (job_tx, job_rx) = mpsc::unbounded_channel::<i64>();
-    let pool = Arc::new(pool);
-    let config = Arc::new(config);
     let semaphore = Arc::new(Semaphore::new(config.max_parallel_builds));
 
     tokio::spawn(worker_loop(
@@ -45,6 +68,8 @@ pub async fn run(config: Config) -> Result<()> {
         Arc::clone(&pool),
         job_rx,
         Arc::clone(&semaphore),
+        uid,
+        gid,
     ));
 
     for build_id in db::list_queued_build_ids(&pool).await? {
@@ -107,6 +132,8 @@ async fn worker_loop(
     pool: Arc<DbPool>,
     mut job_rx: mpsc::UnboundedReceiver<i64>,
     semaphore: Arc<Semaphore>,
+    uid: u32,
+    gid: u32,
 ) {
     while let Some(build_id) = job_rx.recv().await {
         let config = Arc::clone(&config);
@@ -118,14 +145,20 @@ async fn worker_loop(
 
         tokio::spawn(async move {
             let _permit = permit;
-            if let Err(err) = run_one_build(&config, &pool, build_id).await {
+            if let Err(err) = run_one_build(&config, &pool, build_id, uid, gid).await {
                 eprintln!("mjolnixd: build {build_id} failed: {err:#}");
             }
         });
     }
 }
 
-async fn run_one_build(config: &Config, pool: &DbPool, build_id: i64) -> Result<()> {
+async fn run_one_build(
+    config: &Config,
+    pool: &DbPool,
+    build_id: i64,
+    uid: u32,
+    gid: u32,
+) -> Result<()> {
     let build = db::get_build(pool, build_id)
         .await?
         .context("build not found")?;
@@ -149,7 +182,20 @@ async fn run_one_build(config: &Config, pool: &DbPool, build_id: i64) -> Result<
         name: repo_row.get("name"),
     };
 
-    build::run_build(config, pool, &build, &repo).await
+    build::run_build(config, pool, &build, &repo, uid, gid).await
+}
+
+async fn backfill_repo_stores(pool: &DbPool, config: &Config, uid: u32, gid: u32) -> Result<()> {
+    let rows = sqlx::query("SELECT id, namespace, name FROM repos")
+        .fetch_all(pool)
+        .await?;
+    for row in rows {
+        let id: i64 = row.get("id");
+        let namespace: String = row.get("namespace");
+        let name: String = row.get("name");
+        db::ensure_repo_store(pool, config, id, &namespace, &name, uid, gid).await?;
+    }
+    Ok(())
 }
 
 pub async fn enqueue_build(config: &Config, build_id: i64) -> Result<()> {

@@ -1,7 +1,7 @@
 use std::env;
 
-use anyhow::{Context, Result, bail};
 use crate::db::DbPool;
+use anyhow::{Context, Result, bail};
 
 use crate::db;
 

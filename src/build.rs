@@ -1,20 +1,23 @@
 use std::path::Path;
 use std::process::Stdio;
 
-use anyhow::{Context, Result, bail};
 use crate::db::DbPool;
+use anyhow::{Context, Result, bail};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
 use crate::config::Config;
-use crate::db::{self, Build, Repo};
+use crate::db::{self, Build, Repo, RepoStore};
+use crate::store;
 
 pub async fn run_build(
     config: &Config,
     pool: &DbPool,
     build: &Build,
     repo: &Repo,
+    uid: u32,
+    gid: u32,
 ) -> Result<()> {
     let log_path = config.build_log_path(build.repo_id, build.id);
     if let Some(parent) = log_path.parent() {
@@ -25,10 +28,22 @@ pub async fn run_build(
 
     db::set_build_running(pool, build.id, &log_path.to_string_lossy()).await?;
 
+    let repo_store =
+        db::ensure_repo_store(pool, config, repo.id, &repo.namespace, &repo.name, uid, gid).await?;
+
     let repo_path = config.repo_disk_path(&repo.namespace, &repo.name);
     let work_path = config.build_work_path(build.repo_id, &build.rev);
 
-    if let Err(err) = run_build_inner(config, &repo_path, &build.rev, &work_path, &log_path).await {
+    if let Err(err) = run_build_inner(
+        config,
+        &repo_store,
+        &repo_path,
+        &build.rev,
+        &work_path,
+        &log_path,
+    )
+    .await
+    {
         let summary = err.to_string();
         let _ = append_log(&log_path, &format!("\n--- build failed ---\n{summary}\n")).await;
         db::set_build_failed(pool, build.id, &truncate_summary(&summary)).await?;
@@ -36,13 +51,14 @@ pub async fn run_build(
     }
 
     let result_link = work_path.join("result");
-    let paths = closure_paths(&result_link).await?;
+    let paths = store::closure_paths(&repo_store.store_uri, &result_link).await?;
     db::set_build_success(pool, build.id, &paths).await?;
     Ok(())
 }
 
 async fn run_build_inner(
     config: &Config,
+    repo_store: &RepoStore,
     repo_path: &Path,
     rev: &str,
     work_path: &Path,
@@ -68,19 +84,52 @@ async fn run_build_inner(
         .context("open build log")?;
 
     log_file
-        .write_all(b"--- nix build ---\n")
+        .write_all(format!("--- nix build (store: {}) ---\n", repo_store.store_uri).as_bytes())
         .await
         .context("write log")?;
+
+    if config.cache_enable {
+        log_file
+            .write_all(format!("--- substituter: {} ---\n", repo_store.substituter_url).as_bytes())
+            .await
+            .ok();
+    }
 
     let flake_path = format!("{}#", work_path.display());
     let result_link = work_path.join("result");
 
     let mut cmd = Command::new("nix");
-    cmd.args(["build", &flake_path, "--out-link"])
-        .arg(&result_link)
-        .current_dir(work_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args([
+        "build",
+        &flake_path,
+        "--out-link",
+        result_link.to_string_lossy().as_ref(),
+        "--store",
+        &repo_store.store_uri,
+    ])
+    .current_dir(work_path)
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+
+    if config.cache_enable {
+        if let Some(ref public_key) = repo_store.cache_public_key {
+            cmd.args([
+                "--option",
+                "substituters",
+                &repo_store.substituter_url,
+                "--option",
+                "trusted-public-keys",
+                public_key,
+            ]);
+        } else {
+            log_file
+                .write_all(b"warning: cache enabled but cache_public_key not set yet\n")
+                .await
+                .ok();
+        }
+    } else {
+        cmd.args(["--option", "substituters", ""]);
+    }
 
     let duration = Duration::from_secs(config.build_timeout_secs);
     let output = timeout(duration, cmd.output())
@@ -139,30 +188,6 @@ async fn materialize_rev(repo_path: &Path, rev: &str, work_path: &Path) -> Resul
     }
 
     Ok(())
-}
-
-async fn closure_paths(result_link: &Path) -> Result<Vec<String>> {
-    let output = Command::new("nix-store")
-        .args(["-qR", &result_link.to_string_lossy()])
-        .output()
-        .await
-        .context("nix-store -qR")?;
-
-    if !output.status.success() {
-        bail!(
-            "nix-store -qR failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let paths: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(String::from)
-        .collect();
-
-    Ok(paths)
 }
 
 async fn append_log(log_path: &Path, text: &str) -> Result<()> {

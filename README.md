@@ -38,23 +38,15 @@ Install hooks on repos created before hooks existed:
 mjolnix install-hooks
 ```
 
-## Nix binary cache (Harmonia)
+## Per-repo Nix stores and binary cache
 
-Successful builds populate the host Nix store. Serve them with [Harmonia](https://github.com/nix-community/harmonia):
+Each repository has its own Nix store under `$MJOLNIX_DATA_DIR/stores/<repo-id>/`. Builds run with `nix build --store …` against that store only (not the host `/nix/store`).
 
-```bash
-# In dev shell (see harmonia-dev.toml)
-nix run .#harmonia -- -c harmonia-dev.toml
-```
+When `MJOLNIX_CACHE_ENABLE` is set (default: on), `mjolnixd` also serves an HTTP binary cache per repo at:
 
-Client configuration:
+`http://<MJOLNIX_CACHE_HOST>:<port>/r/<namespace>/<name>`
 
-```ini
-extra-substituters = http://127.0.0.1:5000
-trusted-public-keys = <your-harmonia-public-key>
-```
-
-Set `MJOLNIX_SUBSTITUTER_URL` so the SSH TUI prints copy hints after successful builds.
+After a successful build, the SSH TUI shows the substituter URL and `trusted-public-keys` for that repo. Signing key material is stored at `$MJOLNIX_DATA_DIR/cache-secret-key` by default.
 
 ## Environment
 
@@ -63,7 +55,10 @@ Set `MJOLNIX_SUBSTITUTER_URL` so the SSH TUI prints copy hints after successful 
 | `MJOLNIX_DATABASE_URL` | PostgreSQL connection URL (required) |
 | `MJOLNIX_DATA_DIR` | Bare repos, workdirs, logs, socket (default: `~/.local/share/mjolnix`) |
 | `MJOLNIX_KEY_FINGERPRINT` | SSH key identity for git/TUI |
-| `MJOLNIX_SUBSTITUTER_URL` | Binary cache URL shown in TUI |
+| `MJOLNIX_STORES_DIR` | Per-repo Nix store roots (default: `$MJOLNIX_DATA_DIR/stores`) |
+| `MJOLNIX_CACHE_ENABLE` | Enable built-in HTTP cache in `mjolnixd` (default: `true`) |
+| `MJOLNIX_CACHE_BIND` / `MJOLNIX_CACHE_HOST` / `MJOLNIX_CACHE_PORT` | Cache listener and URL host used in substituter paths |
+| `MJOLNIX_CACHE_SIGN_KEY_PATH` / `MJOLNIX_CACHE_KEY_NAME` | Binary cache signing key |
 | `MJOLNIX_MAX_PARALLEL_BUILDS` | Daemon concurrency (default: 2) |
 | `MJOLNIX_BUILD_TIMEOUT_SECS` | Per-build timeout (default: 3600) |
 
@@ -86,7 +81,7 @@ Set `MJOLNIX_SUBSTITUTER_URL` so the SSH TUI prints copy hints after successful 
             authorizedKeys = [
               "ssh-ed25519 AAAA... you@laptop"
             ];
-            binaryCache.enable = true; # Harmonia on port 5000
+            binaryCache.enable = true;
             # Bundled PostgreSQL (peer auth as user `git`) is enabled by default.
           };
         }

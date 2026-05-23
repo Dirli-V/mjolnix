@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPoolOptions, PgRow};
-use sqlx::{PgPool, Row};
 use sqlx::types::Json;
+use sqlx::{PgPool, Row};
 
 use crate::config::Config;
+use crate::signing;
+use crate::store;
 
 pub type DbPool = PgPool;
 
@@ -45,6 +47,15 @@ pub struct Repo {
     pub id: i64,
     pub namespace: String,
     pub name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepoStore {
+    pub repo_id: i64,
+    pub store_root: String,
+    pub store_uri: String,
+    pub substituter_url: String,
+    pub cache_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -131,11 +142,12 @@ pub async fn list_repos_for_user(pool: &DbPool, user_id: i64) -> Result<Vec<Repo
 }
 
 pub async fn get_repo(pool: &DbPool, namespace: &str, name: &str) -> Result<Option<Repo>> {
-    let row = sqlx::query("SELECT id, namespace, name FROM repos WHERE namespace = $1 AND name = $2")
-        .bind(namespace)
-        .bind(name)
-        .fetch_optional(pool)
-        .await?;
+    let row =
+        sqlx::query("SELECT id, namespace, name FROM repos WHERE namespace = $1 AND name = $2")
+            .bind(namespace)
+            .bind(name)
+            .fetch_optional(pool)
+            .await?;
 
     Ok(row.map(|r| Repo {
         id: r.get("id"),
@@ -144,16 +156,116 @@ pub async fn get_repo(pool: &DbPool, namespace: &str, name: &str) -> Result<Opti
     }))
 }
 
-pub async fn create_repo(pool: &DbPool, user_id: i64, namespace: &str, name: &str) -> Result<i64> {
-    sqlx::query_scalar(
+pub async fn create_repo(
+    pool: &DbPool,
+    config: &Config,
+    user_id: i64,
+    namespace: &str,
+    name: &str,
+    uid: u32,
+    gid: u32,
+) -> Result<i64> {
+    let repo_id: i64 = sqlx::query_scalar(
         "INSERT INTO repos (user_id, namespace, name) VALUES ($1, $2, $3) RETURNING id",
     )
     .bind(user_id)
     .bind(namespace)
     .bind(name)
     .fetch_one(pool)
-    .await
-    .map_err(Into::into)
+    .await?;
+
+    ensure_repo_store(pool, config, repo_id, namespace, name, uid, gid).await?;
+    Ok(repo_id)
+}
+
+pub async fn get_repo_store(pool: &DbPool, repo_id: i64) -> Result<Option<RepoStore>> {
+    let row = sqlx::query(
+        "SELECT repo_id, store_root, store_uri, substituter_url, cache_public_key FROM repo_stores WHERE repo_id = $1",
+    )
+    .bind(repo_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| RepoStore {
+        repo_id: r.get("repo_id"),
+        store_root: r.get("store_root"),
+        store_uri: r.get("store_uri"),
+        substituter_url: r.get("substituter_url"),
+        cache_public_key: r.get("cache_public_key"),
+    }))
+}
+
+pub async fn ensure_repo_store(
+    pool: &DbPool,
+    config: &Config,
+    repo_id: i64,
+    namespace: &str,
+    name: &str,
+    uid: u32,
+    gid: u32,
+) -> Result<RepoStore> {
+    if let Some(existing) = get_repo_store(pool, repo_id).await?
+        && !existing.store_root.is_empty()
+    {
+        signing::publish_cache_public_keys(config, pool).await?;
+        return get_repo_store(pool, repo_id)
+            .await?
+            .context("repo store row missing after publish");
+    }
+
+    let store_root = store::store_root_for_repo(config, repo_id);
+    store::ensure_store_root(&store_root).await?;
+    let store_uri = store::store_uri(&store_root, uid, gid);
+    let substituter_url = store::substituter_url(config, namespace, name);
+
+    sqlx::query(
+        r#"
+        INSERT INTO repo_stores (repo_id, store_root, store_uri, substituter_url)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (repo_id) DO UPDATE SET
+            store_root = EXCLUDED.store_root,
+            store_uri = EXCLUDED.store_uri,
+            substituter_url = EXCLUDED.substituter_url,
+            updated_at = NOW()
+        "#,
+    )
+    .bind(repo_id)
+    .bind(store_root.to_string_lossy().as_ref())
+    .bind(&store_uri)
+    .bind(&substituter_url)
+    .execute(pool)
+    .await?;
+
+    signing::publish_cache_public_keys(config, pool).await?;
+
+    get_repo_store(pool, repo_id)
+        .await?
+        .context("repo store row missing after insert")
+}
+
+pub async fn set_repo_store_cache_public_key(
+    pool: &DbPool,
+    repo_id: i64,
+    public_key: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE repo_stores SET cache_public_key = $1, updated_at = NOW() WHERE repo_id = $2",
+    )
+    .bind(public_key)
+    .bind(repo_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_all_repo_store_cache_public_keys(pool: &DbPool, public_key: &str) -> Result<()> {
+    sqlx::query(
+        "UPDATE repo_stores SET cache_public_key = $1, updated_at = NOW() WHERE cache_public_key IS DISTINCT FROM $1",
+    )
+    .bind(public_key)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub async fn user_owns_repo(
@@ -192,14 +304,12 @@ pub async fn insert_build_queued(
 }
 
 pub async fn set_build_running(pool: &DbPool, build_id: i64, log_path: &str) -> Result<()> {
-    sqlx::query(
-        "UPDATE builds SET status = $1, started_at = NOW(), log_path = $2 WHERE id = $3",
-    )
-    .bind(BuildStatus::Running.as_str())
-    .bind(log_path)
-    .bind(build_id)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE builds SET status = $1, started_at = NOW(), log_path = $2 WHERE id = $3")
+        .bind(BuildStatus::Running.as_str())
+        .bind(log_path)
+        .bind(build_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -241,23 +351,21 @@ pub async fn get_build(pool: &DbPool, build_id: i64) -> Result<Option<Build>> {
 }
 
 pub async fn latest_build_for_repo(pool: &DbPool, repo_id: i64) -> Result<Option<Build>> {
-    let row = sqlx::query(
-        "SELECT * FROM builds WHERE repo_id = $1 ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(repo_id)
-    .fetch_optional(pool)
-    .await?;
+    let row =
+        sqlx::query("SELECT * FROM builds WHERE repo_id = $1 ORDER BY created_at DESC LIMIT 1")
+            .bind(repo_id)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|r| row_to_build(&r)))
 }
 
 pub async fn list_builds_for_repo(pool: &DbPool, repo_id: i64, limit: i64) -> Result<Vec<Build>> {
-    let rows = sqlx::query(
-        "SELECT * FROM builds WHERE repo_id = $1 ORDER BY created_at DESC LIMIT $2",
-    )
-    .bind(repo_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+    let rows =
+        sqlx::query("SELECT * FROM builds WHERE repo_id = $1 ORDER BY created_at DESC LIMIT $2")
+            .bind(repo_id)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?;
     Ok(rows.iter().map(row_to_build).collect())
 }
 

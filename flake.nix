@@ -118,13 +118,6 @@
                 mainProgram = "mjolnixd";
               };
             };
-            harmonia = {
-              type = "app";
-              program = "${pkgs.harmonia}/bin/harmonia";
-              meta = {
-                description = "Nix binary cache for mjolnix build outputs";
-              };
-            };
           };
 
           devShells = {
@@ -133,7 +126,7 @@
               packages = [
                 pkgs.git
                 pkgs.nix
-                pkgs.harmonia
+                pkgs.xz
                 pkgs.rust-analyzer
                 pkgs.rustfmt
               ];
@@ -144,11 +137,12 @@
                 export MJOLNIX_DATABASE_URL="''${MJOLNIX_DATABASE_URL:-postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix}"
                 export MJOLNIX_KEY_FINGERPRINT="''${MJOLNIX_KEY_FINGERPRINT:-dev:local}"
                 export MJOLNIX_BIN="$root/target/debug/mjolnix"
-                export MJOLNIX_SUBSTITUTER_URL="''${MJOLNIX_SUBSTITUTER_URL:-http://127.0.0.1:5000}"
+                export MJOLNIX_CACHE_ENABLE="''${MJOLNIX_CACHE_ENABLE:-1}"
+                export MJOLNIX_CACHE_BIND="''${MJOLNIX_CACHE_BIND:-127.0.0.1:5000}"
+                export MJOLNIX_CACHE_HOST="''${MJOLNIX_CACHE_HOST:-127.0.0.1}"
                 echo "mjolnix dev: data=$MJOLNIX_DATA_DIR db=$MJOLNIX_DATABASE_URL"
                 echo "  docker compose up -d   local PostgreSQL"
-                echo "  run-mjolnixd   start build daemon"
-                echo "  nix run .#harmonia -- -c $PWD/harmonia-dev.toml   binary cache (optional)"
+                echo "  run-mjolnixd   build daemon + per-repo binary cache on $MJOLNIX_CACHE_BIND"
               '';
             };
           };
