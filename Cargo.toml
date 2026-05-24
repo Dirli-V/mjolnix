@@ -1,9 +1,9 @@
 [workspace]
 members = [
-  "crates/mjolnix-shared",
-  "crates/mjolnix-worker",
-  "crates/mjolnix-cache",
-  "crates/mjolnix-frontend",
+    "crates/mjolnix-shared",
+    "crates/mjolnix-worker",
+    "crates/mjolnix-cache",
+    "crates/mjolnix-frontend",
 ]
 resolver = "2"
 
