@@ -377,11 +377,11 @@ pub async fn list_queued_build_ids(pool: &DbPool) -> Result<Vec<i64>> {
     Ok(rows.into_iter().map(|r| r.get("id")).collect())
 }
 
-pub async fn recover_stale_running_builds(pool: &DbPool) -> Result<u64> {
+pub async fn requeue_stale_running_builds(pool: &DbPool) -> Result<u64> {
     let result = sqlx::query(
-        "UPDATE builds SET status = $1, finished_at = NOW(), error_summary = 'daemon restarted' WHERE status = $2",
+        "UPDATE builds SET status = $1, started_at = NULL, finished_at = NULL, log_path = NULL, error_summary = NULL WHERE status = $2",
     )
-    .bind(BuildStatus::Failed.as_str())
+    .bind(BuildStatus::Queued.as_str())
     .bind(BuildStatus::Running.as_str())
     .execute(pool)
     .await?;

@@ -20,12 +20,9 @@ pub async fn run(config: Config) -> Result<()> {
     let pool = db::connect(&config).await?;
     db::migrate(&pool).await?;
 
-    let (uid, gid) = store::process_uid_gid();
-    backfill_repo_stores(&pool, &config, uid, gid).await?;
-
-    let recovered = db::recover_stale_running_builds(&pool).await?;
-    if recovered > 0 {
-        eprintln!("mjolnixd: marked {recovered} stale running build(s) as failed");
+    let requeued = db::requeue_stale_running_builds(&pool).await?;
+    if requeued > 0 {
+        eprintln!("mjolnixd: requeued {requeued} stale running build(s) after restart");
     }
 
     let pool = Arc::new(pool);
@@ -63,6 +60,7 @@ pub async fn run(config: Config) -> Result<()> {
     let (job_tx, job_rx) = mpsc::unbounded_channel::<i64>();
     let semaphore = Arc::new(Semaphore::new(config.max_parallel_builds));
 
+    let (uid, gid) = store::process_uid_gid();
     tokio::spawn(worker_loop(
         Arc::clone(&config),
         Arc::clone(&pool),
@@ -183,19 +181,6 @@ async fn run_one_build(
     };
 
     build::run_build(config, pool, &build, &repo, uid, gid).await
-}
-
-async fn backfill_repo_stores(pool: &DbPool, config: &Config, uid: u32, gid: u32) -> Result<()> {
-    let rows = sqlx::query("SELECT id, namespace, name FROM repos")
-        .fetch_all(pool)
-        .await?;
-    for row in rows {
-        let id: i64 = row.get("id");
-        let namespace: String = row.get("namespace");
-        let name: String = row.get("name");
-        db::ensure_repo_store(pool, config, id, &namespace, &name, uid, gid).await?;
-    }
-    Ok(())
 }
 
 pub async fn enqueue_build(config: &Config, build_id: i64) -> Result<()> {

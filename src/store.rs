@@ -109,12 +109,5 @@ pub fn validate_repo_route(namespace: &str, name: &str) -> Result<()> {
 }
 
 pub fn process_uid_gid() -> (u32, u32) {
-    #[cfg(unix)]
-    {
-        unsafe { (libc::geteuid(), libc::getegid()) }
-    }
-    #[cfg(not(unix))]
-    {
-        (0, 0)
-    }
+    unsafe { (libc::geteuid(), libc::getegid()) }
 }
