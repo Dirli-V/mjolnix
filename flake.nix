@@ -66,6 +66,26 @@
           '';
         }
       );
+
+      start_db = pkgs.writeShellScriptBin "start_db" ''
+        set -euo pipefail
+        exec docker compose up -d
+      '';
+
+      frontend = pkgs.writeShellScriptBin "frontend" ''
+        set -euo pipefail
+        exec cargo run -p mjolnix-frontend
+      '';
+
+      worker = pkgs.writeShellScriptBin "worker" ''
+        set -euo pipefail
+        exec cargo run -p mjolnix-worker
+      '';
+
+      cache = pkgs.writeShellScriptBin "cache" ''
+        set -euo pipefail
+        exec cargo run -p mjolnix-cache
+      '';
     in {
       checks = {
         inherit mjolnix;
@@ -108,10 +128,12 @@
         default = {
           type = "app";
           program = "${mjolnix}/bin/mjolnix-frontend";
-          meta = (mjolnix.meta or {}) // {
-            description = "mjolnix SSH frontend";
-            mainProgram = "mjolnix-frontend";
-          };
+          meta =
+            (mjolnix.meta or {})
+            // {
+              description = "mjolnix SSH frontend";
+              mainProgram = "mjolnix-frontend";
+            };
         };
         frontend = {
           type = "app";
@@ -136,21 +158,15 @@
             pkgs.xz
             pkgs.rust-analyzer
             pkgs.rustfmt
+            start_db
+            frontend
+            worker
+            cache
           ];
           shellHook = ''
-            root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-            export PATH="$root/scripts:''${PATH}"
-            export MJOLNIX_DATA_DIR="''${MJOLNIX_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/mjolnix}"
-            export MJOLNIX_DATABASE_URL="''${MJOLNIX_DATABASE_URL:-postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix}"
-            export MJOLNIX_KEY_FINGERPRINT="''${MJOLNIX_KEY_FINGERPRINT:-dev:local}"
-            export MJOLNIX_BIN="$root/target/debug/mjolnix-frontend"
-            export MJOLNIX_FRONTEND_BIN="$root/target/debug/mjolnix-frontend"
-            export MJOLNIX_CACHE_BIND="''${MJOLNIX_CACHE_BIND:-127.0.0.1:5000}"
-            export MJOLNIX_CACHE_HOST="''${MJOLNIX_CACHE_HOST:-127.0.0.1}"
-            echo "mjolnix dev: data=$MJOLNIX_DATA_DIR db=$MJOLNIX_DATABASE_URL"
-            echo "  docker compose up -d        local PostgreSQL"
-            echo "  cargo run -p mjolnix-worker   build worker"
-            echo "  cargo run -p mjolnix-cache    binary cache on $MJOLNIX_CACHE_BIND"
+            export MJOLNIX_DATABASE_URL=postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix
+            echo "Run 'start_db' to start the database"
+            echo "Run 'frontend', 'worker', or 'cache'"
           '';
         };
       };
