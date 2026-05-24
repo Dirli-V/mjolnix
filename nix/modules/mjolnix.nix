@@ -166,6 +166,8 @@ in
       # `ensureDatabases` creates the DB as the superuser; hand ownership to the git user for peer auth + migrations.
       initialScript = pkgs.writeText "mjolnix-postgresql-init.sql" ''
         ALTER DATABASE ${cfg.database.name} OWNER TO ${cfg.user};
+        \connect ${cfg.database.name}
+        ALTER SCHEMA public OWNER TO ${cfg.user};
       '';
     };
 
