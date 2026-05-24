@@ -127,9 +127,6 @@ pub async fn publish_cache_public_keys(
     config: &crate::config::Config,
     pool: &DbPool,
 ) -> Result<()> {
-    if !config.cache_enable {
-        return Ok(());
-    }
     let key =
         load_or_create_secret_key(&config.cache_sign_key_path, &config.cache_key_name).await?;
     crate::db::set_all_repo_store_cache_public_keys(pool, &key.public_key_line).await?;

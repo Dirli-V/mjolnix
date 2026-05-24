@@ -3,21 +3,18 @@
   lib,
   pkgs,
   ...
-}:
-
-let
+}: let
   cfg = config.services.mjolnix;
 
   # NixOS postgresql.service uses this socket directory (see nixpkgs postgresql module).
   postgresqlSocketDir = "/run/postgresql";
 
   databaseUrl =
-    if cfg.database.url != null then
-      cfg.database.url
-    else if cfg.database.enable then
-      "postgres:///${cfg.database.name}?host=${postgresqlSocketDir}&user=${cfg.user}"
-    else
-      throw "services.mjolnix.database.url must be set when services.mjolnix.database.enable is false";
+    if cfg.database.url != null
+    then cfg.database.url
+    else if cfg.database.enable
+    then "postgres:///${cfg.database.name}?host=${postgresqlSocketDir}&user=${cfg.user}"
+    else throw "services.mjolnix.database.url must be set when services.mjolnix.database.enable is false";
 
   mjolnixEnv = {
     MJOLNIX_DATA_DIR = cfg.dataDir;
@@ -32,8 +29,7 @@ let
     #!${pkgs.runtimeShell}
     exec ${cfg.package}/bin/mjolnix
   '';
-in
-{
+in {
   options.services.mjolnix = {
     enable = lib.mkEnableOption "mjolnix git hosting with Nix builds";
 
@@ -70,7 +66,7 @@ in
 
     authorizedKeys = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [ ];
+      default = [];
       description = "SSH public keys allowed to log in as the mjolnix user.";
     };
 
@@ -156,7 +152,7 @@ in
 
     services.postgresql = lib.mkIf cfg.database.enable {
       enable = true;
-      ensureDatabases = [ cfg.database.name ];
+      ensureDatabases = [cfg.database.name];
       ensureUsers = [
         {
           name = cfg.user;
@@ -184,13 +180,13 @@ in
       '';
     };
 
-    users.groups.${cfg.group} = { };
+    users.groups.${cfg.group} = {};
 
     users.users.${cfg.user} = {
       description = "mjolnix git user";
       isSystemUser = true;
       group = cfg.group;
-      extraGroups = [ "nixbld" ];
+      extraGroups = ["nixbld"];
       home = cfg.dataDir;
       createHome = false;
       shell = lib.mkForce "${lib.getExe mjolnixLoginShell}";
@@ -208,20 +204,22 @@ in
 
     systemd.services.mjolnixd = {
       description = "mjolnix Nix build daemon";
-      wantedBy = [ "multi-user.target" ];
-      after = lib.optionals cfg.database.enable [ "postgresql.service" ] ++ [ "network.target" ];
-      requires = lib.optionals cfg.database.enable [ "postgresql.service" ];
-      wants = [ "network.target" ];
+      wantedBy = ["multi-user.target"];
+      after = lib.optionals cfg.database.enable ["postgresql.service"] ++ ["network.target"];
+      requires = lib.optionals cfg.database.enable ["postgresql.service"];
+      wants = ["network.target"];
 
-      environment = mjolnixEnv // lib.optionalAttrs cfg.binaryCache.enable {
-        MJOLNIX_CACHE_ENABLE = "1";
-        MJOLNIX_CACHE_BIND = cfg.binaryCache.bind;
-        MJOLNIX_CACHE_HOST = cfg.host;
-        MJOLNIX_CACHE_PORT = toString cfg.binaryCache.port;
-        MJOLNIX_CACHE_KEY_NAME = cfg.binaryCache.keyName;
-      } // lib.optionalAttrs (cfg.binaryCache.signKeyPath != null) {
-        MJOLNIX_CACHE_SIGN_KEY_PATH = toString cfg.binaryCache.signKeyPath;
-      };
+      environment =
+        mjolnixEnv
+        // lib.optionalAttrs cfg.binaryCache.enable {
+          MJOLNIX_CACHE_BIND = cfg.binaryCache.bind;
+          MJOLNIX_CACHE_HOST = cfg.host;
+          MJOLNIX_CACHE_PORT = toString cfg.binaryCache.port;
+          MJOLNIX_CACHE_KEY_NAME = cfg.binaryCache.keyName;
+        }
+        // lib.optionalAttrs (cfg.binaryCache.signKeyPath != null) {
+          MJOLNIX_CACHE_SIGN_KEY_PATH = toString cfg.binaryCache.signKeyPath;
+        };
 
       serviceConfig = {
         Type = "simple";
@@ -241,7 +239,7 @@ in
 
     # Per-repo substituters are http://HOST:PORT/r/NAMESPACE/NAME (see repo_stores).
     nix.settings = lib.mkIf cfg.binaryCache.enable {
-      trusted-users = lib.mkAfter [ cfg.user ];
+      trusted-users = lib.mkAfter [cfg.user];
     };
   };
 }

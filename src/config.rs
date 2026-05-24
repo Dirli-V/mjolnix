@@ -13,7 +13,6 @@ pub struct Config {
     pub socket_path: PathBuf,
     pub host: String,
     pub stores_dir: PathBuf,
-    pub cache_enable: bool,
     pub cache_bind: String,
     pub cache_host: String,
     pub cache_port: u16,
@@ -37,10 +36,6 @@ impl Config {
             .context("set MJOLNIX_DATA_DIR or use a standard home directory layout")?;
 
         let host = env::var("MJOLNIX_HOST").unwrap_or_else(|_| "localhost".into());
-
-        let cache_enable = env::var("MJOLNIX_CACHE_ENABLE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(true);
 
         let cache_bind = env::var("MJOLNIX_CACHE_BIND").unwrap_or_else(|_| "0.0.0.0:5000".into());
         let cache_host = env::var("MJOLNIX_CACHE_HOST").unwrap_or_else(|_| host.clone());
@@ -94,7 +89,6 @@ impl Config {
             stores_dir,
             socket_path,
             host,
-            cache_enable,
             cache_bind,
             cache_host,
             cache_port,

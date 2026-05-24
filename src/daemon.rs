@@ -28,21 +28,19 @@ pub async fn run(config: Config) -> Result<()> {
     let pool = Arc::new(pool);
     let config = Arc::new(config);
 
-    if config.cache_enable {
-        signing::publish_cache_public_keys(config.as_ref(), pool.as_ref()).await?;
-        let signing_key =
-            signing::load_or_create_secret_key(&config.cache_sign_key_path, &config.cache_key_name)
-                .await?;
+    signing::publish_cache_public_keys(config.as_ref(), pool.as_ref()).await?;
+    let signing_key =
+        signing::load_or_create_secret_key(&config.cache_sign_key_path, &config.cache_key_name)
+            .await?;
 
-        let cache_config = Arc::clone(&config);
-        let cache_pool = pool.as_ref().clone();
-        let key = signing_key.clone();
-        tokio::spawn(async move {
-            if let Err(err) = cache::run_server(cache_config, cache_pool, key).await {
-                eprintln!("mjolnix-cache: {err:#}");
-            }
-        });
-    }
+    let cache_config = Arc::clone(&config);
+    let cache_pool = pool.as_ref().clone();
+    let key = signing_key.clone();
+    tokio::spawn(async move {
+        if let Err(err) = cache::run_server(cache_config, cache_pool, key).await {
+            eprintln!("mjolnix-cache: {err:#}");
+        }
+    });
 
     if config.socket_path.exists() {
         std::fs::remove_file(&config.socket_path).context("remove stale socket")?;

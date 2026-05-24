@@ -141,7 +141,7 @@ impl App {
             Screen::RepoList => self.key_repo_list(key, config, pool).await?,
             Screen::CreateRepo => self.key_create_repo(key, config, pool).await?,
             Screen::RepoMenu => self.key_repo_menu(key, config, pool).await?,
-            Screen::BuildHistory => self.key_build_history(key, config, pool).await?,
+            Screen::BuildHistory => self.key_build_history(key, pool).await?,
             Screen::ScrollView => self.key_scroll(key),
         }
         Ok(())
@@ -226,7 +226,7 @@ impl App {
                     }
                     1 => {
                         let lines = if let Some(build) = &self.latest_build {
-                            build_detail_lines(config, pool, repo.id, build).await?
+                            build_detail_lines(pool, repo.id, build).await?
                         } else {
                             vec!["No builds yet.".into()]
                         };
@@ -249,12 +249,7 @@ impl App {
         Ok(())
     }
 
-    async fn key_build_history(
-        &mut self,
-        key: KeyEvent,
-        config: &Config,
-        pool: &DbPool,
-    ) -> Result<()> {
+    async fn key_build_history(&mut self, key: KeyEvent, pool: &DbPool) -> Result<()> {
         let repo_id = self.current_repo.as_ref().map(|r| r.id).unwrap_or(0);
         match key.code {
             KeyCode::Esc => self.screen = Screen::RepoMenu,
@@ -262,7 +257,7 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.select_prev_build(),
             KeyCode::Enter => {
                 if let Some(build) = self.selected_build().cloned() {
-                    let mut lines = build_detail_lines(config, pool, repo_id, &build).await?;
+                    let mut lines = build_detail_lines(pool, repo_id, &build).await?;
                     if let Some(path) = &build.log_path {
                         lines.push(String::new());
                         lines.push("--- log (last 50 lines) ---".into());
@@ -310,7 +305,7 @@ impl App {
         self.current_repo = Some(repo.clone());
         self.latest_build = db::latest_build_for_repo(pool, repo.id).await?;
         self.cache_lines = if let Ok(Some(store)) = db::get_repo_store(pool, repo.id).await {
-            repo_cache_hint_lines(&self.config, &store)
+            repo_cache_hint_lines(&store)
         } else {
             Vec::new()
         };
@@ -441,7 +436,7 @@ impl App {
             format!("Clone: git clone {}", config.clone_url(NAMESPACE, &name)),
         ];
         if let Some(repo_store) = db::get_repo_store(pool, repo_id).await? {
-            lines.extend(repo_cache_hint_lines(config, &repo_store));
+            lines.extend(repo_cache_hint_lines(&repo_store));
         }
         lines.push("Start mjolnixd to build flakes on push: mjolnixd".into());
         self.show_scroll(Screen::RepoList, "Repository created", lines);
@@ -502,14 +497,9 @@ fn log_tail_lines(log_path: &str, lines: usize) -> Result<Vec<String>> {
     Ok(tail[start..].iter().map(|l| format!("  {l}")).collect())
 }
 
-fn repo_cache_hint_lines(config: &Config, repo_store: &RepoStore) -> Vec<String> {
+fn repo_cache_hint_lines(repo_store: &RepoStore) -> Vec<String> {
     let mut lines = Vec::new();
-    if !config.cache_enable {
-        lines.push("Binary cache is disabled (MJOLNIX_CACHE_ENABLE=0).".into());
-        lines.push("Per-repo substituter URL (when cache is enabled):".into());
-    } else {
-        lines.push(format!("Binary cache: {}", repo_store.substituter_url));
-    }
+    lines.push(format!("Binary cache: {}", repo_store.substituter_url));
     lines.push("Add to /etc/nix/nix.conf or ~/.config/nix/nix.conf:".into());
     lines.push(format!(
         "  extra-substituters = {}",
@@ -525,12 +515,7 @@ fn repo_cache_hint_lines(config: &Config, repo_store: &RepoStore) -> Vec<String>
     lines
 }
 
-async fn build_detail_lines(
-    config: &Config,
-    pool: &DbPool,
-    repo_id: i64,
-    build: &Build,
-) -> Result<Vec<String>> {
+async fn build_detail_lines(pool: &DbPool, repo_id: i64, build: &Build) -> Result<Vec<String>> {
     let mut lines = vec![
         format!("Build #{}", build.id),
         format!("  rev:      {}", build.rev),
@@ -562,7 +547,7 @@ async fn build_detail_lines(
         }
         if let Ok(Some(repo_store)) = db::get_repo_store(pool, repo_id).await {
             lines.push(String::new());
-            lines.extend(repo_cache_hint_lines(config, &repo_store));
+            lines.extend(repo_cache_hint_lines(&repo_store));
             if let Some(paths) = &build.closure_paths
                 && let Some(first) = paths.first()
             {

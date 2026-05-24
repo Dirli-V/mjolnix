@@ -32,12 +32,6 @@ git-with-mjolnix clone localhost:public/demo.git
 git-with-mjolnix -C my-repo push origin main
 ```
 
-Install hooks on repos created before hooks existed:
-
-```bash
-mjolnix install-hooks
-```
-
 ## Per-repo Nix stores and binary cache
 
 Each repository has its own Nix store under `$MJOLNIX_DATA_DIR/stores/<repo-id>/`. Builds run with `nix build --store …` against that store only (not the host `/nix/store`).

@@ -88,12 +88,10 @@ async fn run_build_inner(
         .await
         .context("write log")?;
 
-    if config.cache_enable {
-        log_file
-            .write_all(format!("--- substituter: {} ---\n", repo_store.substituter_url).as_bytes())
-            .await
-            .ok();
-    }
+    log_file
+        .write_all(format!("--- substituter: {} ---\n", repo_store.substituter_url).as_bytes())
+        .await
+        .ok();
 
     let flake_path = format!("{}#", work_path.display());
     let result_link = work_path.join("result");
@@ -111,24 +109,20 @@ async fn run_build_inner(
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
 
-    if config.cache_enable {
-        if let Some(ref public_key) = repo_store.cache_public_key {
-            cmd.args([
-                "--option",
-                "substituters",
-                &repo_store.substituter_url,
-                "--option",
-                "trusted-public-keys",
-                public_key,
-            ]);
-        } else {
-            log_file
-                .write_all(b"warning: cache enabled but cache_public_key not set yet\n")
-                .await
-                .ok();
-        }
+    if let Some(ref public_key) = repo_store.cache_public_key {
+        cmd.args([
+            "--option",
+            "substituters",
+            &repo_store.substituter_url,
+            "--option",
+            "trusted-public-keys",
+            public_key,
+        ]);
     } else {
-        cmd.args(["--option", "substituters", ""]);
+        log_file
+            .write_all(b"warning: cache enabled but cache_public_key not set yet\n")
+            .await
+            .ok();
     }
 
     let duration = Duration::from_secs(config.build_timeout_secs);
