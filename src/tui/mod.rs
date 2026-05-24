@@ -9,13 +9,10 @@ use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::DefaultTerminal;
 
 use crate::config::Config;
-use crate::logo;
 
 use app::App;
 
 pub async fn run(config: &Config, pool: &DbPool) -> Result<()> {
-    logo::show_welcome_logo();
-
     let user_id = crate::auth::current_user_id(pool).await?;
     let mut app = App::new(config.clone(), user_id);
     app.reload_repos(pool).await?;

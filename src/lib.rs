@@ -6,7 +6,6 @@ pub mod daemon;
 pub mod db;
 pub mod git;
 pub mod hook;
-pub mod logo;
 pub mod signing;
 pub mod store;
 pub mod tui;
