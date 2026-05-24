@@ -1,5 +1,3 @@
-//! Binary cache signing (Nix-compatible ed25519 narinfo signatures).
-
 use std::fs;
 use std::path::Path;
 
@@ -66,7 +64,6 @@ async fn parse_secret_key_file(path: &Path) -> Result<CacheSigningKey> {
     let (name, secret_b64) = line
         .split_once(':')
         .context("signing key must be name:base64")?;
-
     let secret_bytes = STANDARD
         .decode(secret_b64.as_bytes())
         .context("decode secret key base64")?;
@@ -81,7 +78,6 @@ async fn parse_secret_key_file(path: &Path) -> Result<CacheSigningKey> {
     };
 
     let public_key_line = public_key_from_secret(path).await?;
-
     Ok(CacheSigningKey {
         name: name.to_string(),
         public_key_line,
@@ -91,7 +87,6 @@ async fn parse_secret_key_file(path: &Path) -> Result<CacheSigningKey> {
 
 async fn public_key_from_secret(path: &Path) -> Result<String> {
     let secret_text = fs::read_to_string(path)?;
-
     let mut child = Command::new("nix")
         .args(["key", "convert-secret-to-public"])
         .stdin(std::process::Stdio::piped())
@@ -112,17 +107,14 @@ async fn public_key_from_secret(path: &Path) -> Result<String> {
         );
     }
 
-    let line = String::from_utf8_lossy(&output.stdout)
+    Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .find(|l| !l.trim().is_empty())
         .context("empty public key output")?
         .trim()
-        .to_string();
-
-    Ok(line)
+        .to_string())
 }
 
-/// Ensure the instance signing key exists and is recorded on all `repo_stores` rows.
 pub async fn publish_cache_public_keys(
     config: &crate::config::Config,
     pool: &DbPool,

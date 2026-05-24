@@ -34,18 +34,25 @@
       inherit (pkgs) lib;
 
       craneLib = crane.mkLib pkgs;
-      # cleanCargoSource omits PNG assets required by include_bytes!
-      src = pkgs.runCommandLocal "mjolnix-source" {} ''
-        mkdir -p $out
-        cp -r ${craneLib.cleanCargoSource ./.}/* $out/
-        chmod -R u+w $out
-        install -D ${./src/assets/mjolnix.png} $out/src/assets/mjolnix.png
-      '';
+
+      src = lib.fileset.toSource {
+        root = ./.;
+        fileset = lib.fileset.unions [
+          ./Cargo.toml
+          ./Cargo.lock
+          ./migrations
+          (craneLib.fileset.commonCargoSources ./crates/mjolnix-shared)
+          (craneLib.fileset.commonCargoSources ./crates/mjolnix-worker)
+          (craneLib.fileset.commonCargoSources ./crates/mjolnix-cache)
+          (craneLib.fileset.commonCargoSources ./crates/mjolnix-frontend)
+        ];
+      };
 
       commonArgs = {
         inherit src;
         strictDeps = true;
         buildInputs = [];
+        cargoExtraArgs = "--workspace --locked";
       };
 
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -54,6 +61,9 @@
         commonArgs
         // {
           inherit cargoArtifacts;
+          postInstall = ''
+            ln -sf mjolnix-frontend $out/bin/mjolnix
+          '';
         }
       );
     in {
@@ -92,29 +102,28 @@
       packages = {
         default = mjolnix;
         inherit mjolnix;
-        mjolnixd = mjolnix;
       };
 
       apps = {
         default = {
           type = "app";
-          program = "${mjolnix}/bin/mjolnix";
-          meta =
-            (mjolnix.meta or {})
-            // {
-              description = "mjolnix";
-              mainProgram = "mjolnix";
-            };
+          program = "${mjolnix}/bin/mjolnix-frontend";
+          meta = (mjolnix.meta or {}) // {
+            description = "mjolnix SSH frontend";
+            mainProgram = "mjolnix-frontend";
+          };
         };
-        mjolnixd = {
+        frontend = {
           type = "app";
-          program = "${mjolnix}/bin/mjolnixd";
-          meta =
-            (mjolnix.meta or {})
-            // {
-              description = "mjolnix build daemon";
-              mainProgram = "mjolnixd";
-            };
+          program = "${mjolnix}/bin/mjolnix-frontend";
+        };
+        worker = {
+          type = "app";
+          program = "${mjolnix}/bin/mjolnix-worker";
+        };
+        cache = {
+          type = "app";
+          program = "${mjolnix}/bin/mjolnix-cache";
         };
       };
 
@@ -134,12 +143,14 @@
             export MJOLNIX_DATA_DIR="''${MJOLNIX_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/mjolnix}"
             export MJOLNIX_DATABASE_URL="''${MJOLNIX_DATABASE_URL:-postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix}"
             export MJOLNIX_KEY_FINGERPRINT="''${MJOLNIX_KEY_FINGERPRINT:-dev:local}"
-            export MJOLNIX_BIN="$root/target/debug/mjolnix"
+            export MJOLNIX_BIN="$root/target/debug/mjolnix-frontend"
+            export MJOLNIX_FRONTEND_BIN="$root/target/debug/mjolnix-frontend"
             export MJOLNIX_CACHE_BIND="''${MJOLNIX_CACHE_BIND:-127.0.0.1:5000}"
             export MJOLNIX_CACHE_HOST="''${MJOLNIX_CACHE_HOST:-127.0.0.1}"
             echo "mjolnix dev: data=$MJOLNIX_DATA_DIR db=$MJOLNIX_DATABASE_URL"
-            echo "  docker compose up -d   local PostgreSQL"
-            echo "  run-mjolnixd   build daemon + per-repo binary cache on $MJOLNIX_CACHE_BIND"
+            echo "  docker compose up -d        local PostgreSQL"
+            echo "  cargo run -p mjolnix-worker   build worker"
+            echo "  cargo run -p mjolnix-cache    binary cache on $MJOLNIX_CACHE_BIND"
           '';
         };
       };

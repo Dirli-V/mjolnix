@@ -1,48 +1,14 @@
-[package]
-name = "mjolnix"
+[workspace]
+members = [
+  "crates/mjolnix-shared",
+  "crates/mjolnix-worker",
+  "crates/mjolnix-cache",
+  "crates/mjolnix-frontend",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
-edition = "2024"
 
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
+[workspace.metadata.crane]
 name = "mjolnix"
-path = "src/main.rs"
-
-[[bin]]
-name = "mjolnixd"
-path = "src/bin/mjolnixd.rs"
-
-[dependencies]
-anyhow = "1"
-axum = "0.8"
-base64 = "0.22"
-chrono = { version = "0.4", default-features = false, features = [
-    "clock",
-    "std",
-] }
-crossterm = "0.29.0"
-directories = "6"
-ed25519-dalek = { version = "2", features = ["rand_core"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
-libc = "0.2"
-ratatui = "0.30.0"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sqlx = { version = "0.8", features = [
-    "runtime-tokio",
-    "postgres",
-    "migrate",
-    "chrono",
-    "json",
-] }
-tokio = { version = "1", features = [
-    "io-util",
-    "macros",
-    "net",
-    "process",
-    "rt-multi-thread",
-    "sync",
-    "time",
-] }

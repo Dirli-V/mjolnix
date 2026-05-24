@@ -6,7 +6,6 @@
 }: let
   cfg = config.services.mjolnix;
 
-  # NixOS postgresql.service uses this socket directory (see nixpkgs postgresql module).
   postgresqlSocketDir = "/run/postgresql";
 
   databaseUrl =
@@ -16,18 +15,41 @@
     then "postgres:///${cfg.database.name}?host=${postgresqlSocketDir}&user=${cfg.user}"
     else throw "services.mjolnix.database.url must be set when services.mjolnix.database.enable is false";
 
+  nixPackage = if config.nix.enable then config.nix.package else pkgs.nix;
+
+  servicePath = lib.makeBinPath [
+    nixPackage
+    pkgs.git
+    pkgs.coreutils
+    pkgs.xz
+  ];
+
   mjolnixEnv = {
     MJOLNIX_DATA_DIR = cfg.dataDir;
     MJOLNIX_HOST = cfg.host;
-    MJOLNIX_BIN = "${lib.getBin cfg.package}/mjolnix";
     MJOLNIX_DATABASE_URL = databaseUrl;
+    MJOLNIX_FRONTEND_BIN = "${lib.getBin cfg.package}/bin/mjolnix-frontend";
     MJOLNIX_MAX_PARALLEL_BUILDS = toString cfg.maxParallelBuilds;
     MJOLNIX_BUILD_TIMEOUT_SECS = toString cfg.buildTimeoutSecs;
+    PATH = lib.mkForce servicePath;
+    NIX_CONFIG = "experimental-features = nix-command flakes";
   };
+
+  cacheEnv =
+    mjolnixEnv
+    // {
+      MJOLNIX_CACHE_BIND = cfg.binaryCache.bind;
+      MJOLNIX_CACHE_HOST = cfg.host;
+      MJOLNIX_CACHE_PORT = toString cfg.binaryCache.port;
+      MJOLNIX_CACHE_KEY_NAME = cfg.binaryCache.keyName;
+    }
+    // lib.optionalAttrs (cfg.binaryCache.signKeyPath != null) {
+      MJOLNIX_CACHE_SIGN_KEY_PATH = toString cfg.binaryCache.signKeyPath;
+    };
 
   mjolnixLoginShell = pkgs.writeScriptBin "mjolnix-login" ''
     #!${pkgs.runtimeShell}
-    exec ${cfg.package}/bin/mjolnix
+    exec ${cfg.package}/bin/mjolnix-frontend
   '';
 in {
   options.services.mjolnix = {
@@ -37,13 +59,13 @@ in {
       type = lib.types.package;
       default = lib.mkIf (lib.hasAttr "mjolnix" pkgs) pkgs.mjolnix;
       defaultText = lib.mkDefault "pkgs.mjolnix";
-      description = "The mjolnix package. Use the flake overlay (`nixpkgs.overlays = [ inputs.mjolnix.overlays.default ];`) or set this to `inputs.mjolnix.packages.<system>.default`.";
+      description = "The mjolnix package (mjolnix-frontend, mjolnix-worker, mjolnix-cache binaries).";
     };
 
     dataDir = lib.mkOption {
       type = lib.types.path;
       default = "/var/lib/mjolnix";
-      description = "State directory for repositories, build workdirs, logs, and daemon socket.";
+      description = "State directory for repositories, build workdirs, logs, and per-repo stores.";
     };
 
     host = lib.mkOption {
@@ -73,7 +95,7 @@ in {
     maxParallelBuilds = lib.mkOption {
       type = lib.types.int;
       default = 2;
-      description = "Maximum concurrent Nix builds in mjolnixd.";
+      description = "Maximum concurrent Nix builds in mjolnix-worker.";
     };
 
     buildTimeoutSecs = lib.mkOption {
@@ -114,7 +136,7 @@ in {
     };
 
     binaryCache = {
-      enable = lib.mkEnableOption "per-repo HTTP binary cache (served by mjolnixd)";
+      enable = lib.mkEnableOption "per-repo HTTP binary cache (mjolnix-cache)";
 
       port = lib.mkOption {
         type = lib.types.port;
@@ -125,7 +147,7 @@ in {
       bind = lib.mkOption {
         type = lib.types.str;
         default = "0.0.0.0:5000";
-        description = "Socket address for mjolnixd to bind the cache (MJOLNIX_CACHE_BIND).";
+        description = "Socket address for mjolnix-cache (MJOLNIX_CACHE_BIND).";
       };
 
       signKeyPath = lib.mkOption {
@@ -159,7 +181,6 @@ in {
           ensureDBOwnership = false;
         }
       ];
-      # `ensureDatabases` creates the DB as the superuser; hand ownership to the git user for peer auth + migrations.
       initialScript = pkgs.writeText "mjolnix-postgresql-init.sql" ''
         ALTER DATABASE ${cfg.database.name} OWNER TO ${cfg.user};
         \connect ${cfg.database.name}
@@ -173,7 +194,8 @@ in {
         Match User ${cfg.user}
           SetEnv MJOLNIX_DATA_DIR=${cfg.dataDir}
           SetEnv MJOLNIX_HOST=${cfg.host}
-          SetEnv MJOLNIX_BIN=${cfg.package}/bin/mjolnix
+          SetEnv MJOLNIX_BIN=${cfg.package}/bin/mjolnix-frontend
+          SetEnv MJOLNIX_FRONTEND_BIN=${cfg.package}/bin/mjolnix-frontend
           SetEnv MJOLNIX_DATABASE_URL=${databaseUrl}
           SetEnv MJOLNIX_MAX_PARALLEL_BUILDS=${toString cfg.maxParallelBuilds}
           SetEnv MJOLNIX_BUILD_TIMEOUT_SECS=${toString cfg.buildTimeoutSecs}
@@ -202,44 +224,80 @@ in {
       "Z ${cfg.dataDir} - ${cfg.user} ${cfg.group} -"
     ];
 
-    systemd.services.mjolnixd = {
-      description = "mjolnix Nix build daemon";
+    systemd.services.mjolnix-postgresql-init = lib.mkIf cfg.database.enable {
+      description = "Ensure mjolnix PostgreSQL role exists";
       wantedBy = ["multi-user.target"];
-      after = lib.optionals cfg.database.enable ["postgresql.service"] ++ ["network.target"];
-      requires = lib.optionals cfg.database.enable ["postgresql.service"];
+      before = ["mjolnix-worker.service" "mjolnix-cache.service"];
+      after = ["postgresql.service"];
+      requires = ["postgresql.service"];
+
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        User = "postgres";
+        ExecStart = pkgs.writeShellScript "mjolnix-postgresql-init" ''
+          set -euo pipefail
+          psql="${pkgs.postgresql}/bin/psql"
+          if ! "$psql" -h ${postgresqlSocketDir} -tAc "SELECT 1 FROM pg_roles WHERE rolname='${cfg.user}'" postgres | grep -q 1; then
+            "$psql" -h ${postgresqlSocketDir} -v ON_ERROR_STOP=1 -c "CREATE ROLE ${cfg.user} WITH LOGIN" postgres
+          fi
+          if ! "$psql" -h ${postgresqlSocketDir} -tAc "SELECT 1 FROM pg_database WHERE datname='${cfg.database.name}'" postgres | grep -q 1; then
+            "$psql" -h ${postgresqlSocketDir} -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${cfg.database.name} OWNER ${cfg.user}" postgres
+          fi
+        '';
+      };
+    };
+
+    systemd.services.mjolnix-worker = {
+      description = "mjolnix Nix build worker";
+      wantedBy = ["multi-user.target"];
+      after =
+        lib.optionals cfg.database.enable ["postgresql.service" "mjolnix-postgresql-init.service"]
+        ++ ["network.target"];
+      requires =
+        lib.optionals cfg.database.enable ["postgresql.service" "mjolnix-postgresql-init.service"];
       wants = ["network.target"];
 
-      environment =
-        mjolnixEnv
-        // lib.optionalAttrs cfg.binaryCache.enable {
-          MJOLNIX_CACHE_BIND = cfg.binaryCache.bind;
-          MJOLNIX_CACHE_HOST = cfg.host;
-          MJOLNIX_CACHE_PORT = toString cfg.binaryCache.port;
-          MJOLNIX_CACHE_KEY_NAME = cfg.binaryCache.keyName;
-        }
-        // lib.optionalAttrs (cfg.binaryCache.signKeyPath != null) {
-          MJOLNIX_CACHE_SIGN_KEY_PATH = toString cfg.binaryCache.signKeyPath;
-        };
+      environment = mjolnixEnv;
 
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
         Group = cfg.group;
-        ExecStart = "${lib.getBin cfg.package}/bin/mjolnixd";
+        ExecStart = "${lib.getBin cfg.package}/bin/mjolnix-worker";
         Restart = "on-failure";
         RestartSec = "5s";
-        Path = with pkgs; [
-          git
-          nix
-          coreutils
-          xz
-        ];
       };
     };
 
-    # Per-repo substituters are http://HOST:PORT/r/NAMESPACE/NAME (see repo_stores).
-    nix.settings = lib.mkIf cfg.binaryCache.enable {
-      trusted-users = lib.mkAfter [cfg.user];
+    systemd.services.mjolnix-cache = lib.mkIf cfg.binaryCache.enable {
+      description = "mjolnix per-repo binary cache";
+      wantedBy = ["multi-user.target"];
+      after =
+        lib.optionals cfg.database.enable ["postgresql.service" "mjolnix-postgresql-init.service"]
+        ++ ["network.target" "mjolnix-worker.service"];
+      requires = lib.optionals cfg.database.enable ["postgresql.service" "mjolnix-postgresql-init.service"];
+      wants = ["network.target"];
+
+      environment = cacheEnv;
+
+      serviceConfig = {
+        Type = "simple";
+        User = cfg.user;
+        Group = cfg.group;
+        ExecStart = "${lib.getBin cfg.package}/bin/mjolnix-cache";
+        Restart = "on-failure";
+        RestartSec = "5s";
+      };
     };
+
+    nix.settings = lib.mkMerge [
+      (lib.mkIf cfg.enable {
+        experimental-features = lib.mkAfter ["nix-command" "flakes"];
+      })
+      (lib.mkIf cfg.binaryCache.enable {
+        trusted-users = lib.mkAfter [cfg.user];
+      })
+    ];
   };
 }

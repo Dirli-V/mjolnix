@@ -10,7 +10,6 @@ pub struct Config {
     pub database_url: String,
     pub work_dir: PathBuf,
     pub logs_dir: PathBuf,
-    pub socket_path: PathBuf,
     pub host: String,
     pub stores_dir: PathBuf,
     pub cache_bind: String,
@@ -20,8 +19,7 @@ pub struct Config {
     pub cache_key_name: String,
     pub max_parallel_builds: usize,
     pub build_timeout_secs: u64,
-    /// Path to mjolnix binary for hook scripts.
-    pub mjolnix_bin: PathBuf,
+    pub mjolnix_frontend_bin: PathBuf,
 }
 
 impl Config {
@@ -36,39 +34,30 @@ impl Config {
             .context("set MJOLNIX_DATA_DIR or use a standard home directory layout")?;
 
         let host = env::var("MJOLNIX_HOST").unwrap_or_else(|_| "localhost".into());
-
         let cache_bind = env::var("MJOLNIX_CACHE_BIND").unwrap_or_else(|_| "0.0.0.0:5000".into());
         let cache_host = env::var("MJOLNIX_CACHE_HOST").unwrap_or_else(|_| host.clone());
         let cache_port = env::var("MJOLNIX_CACHE_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(5000);
-
         let cache_sign_key_path = env::var("MJOLNIX_CACHE_SIGN_KEY_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| data_dir.join("cache-secret-key"));
-
         let cache_key_name =
             env::var("MJOLNIX_CACHE_KEY_NAME").unwrap_or_else(|_| format!("{host}-1"));
-
         let max_parallel_builds = env::var("MJOLNIX_MAX_PARALLEL_BUILDS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(2);
-
         let build_timeout_secs = env::var("MJOLNIX_BUILD_TIMEOUT_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(3600);
-
-        let socket_path = env::var("MJOLNIX_SOCKET")
+        let mjolnix_frontend_bin = env::var("MJOLNIX_FRONTEND_BIN")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| data_dir.join("mjolnixd.sock"));
-
-        let mjolnix_bin = env::var("MJOLNIX_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| env::current_exe().unwrap_or_else(|_| PathBuf::from("mjolnix")));
-
+            .unwrap_or_else(|_| {
+                env::current_exe().unwrap_or_else(|_| PathBuf::from("mjolnix-frontend"))
+            });
         let database_url = env::var("MJOLNIX_DATABASE_URL").context(
             "set MJOLNIX_DATABASE_URL (e.g. postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix)",
         )?;
@@ -86,9 +75,8 @@ impl Config {
             database_url,
             work_dir,
             logs_dir,
-            stores_dir,
-            socket_path,
             host,
+            stores_dir,
             cache_bind,
             cache_host,
             cache_port,
@@ -96,7 +84,7 @@ impl Config {
             cache_key_name,
             max_parallel_builds,
             build_timeout_secs,
-            mjolnix_bin,
+            mjolnix_frontend_bin,
         })
     }
 
@@ -132,15 +120,12 @@ impl Config {
     }
 }
 
-/// `public/my-repo` or `public/my-repo.git` → (`public`, `my-repo`)
 pub fn parse_repo_path(path: &str) -> Result<(&str, &str)> {
     let path = path.trim().trim_matches('\'').trim_matches('"');
     let path = path.strip_suffix(".git").unwrap_or(path);
-
     let (namespace, name) = path
         .split_once('/')
         .context("repo path must be namespace/name (e.g. public/my-repo)")?;
-
     validate_repo_name(name)?;
     Ok((namespace, name))
 }

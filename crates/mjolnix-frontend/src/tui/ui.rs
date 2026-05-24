@@ -15,14 +15,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Constraint::Length(2),
     ])
     .split(area);
-
     draw_header(frame, chunks[0], app);
     draw_body(frame, chunks[1], app);
     draw_footer(frame, chunks[2], app);
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
-    let title = format!(" mjolnix │ user {} │ {} ", app.user_id, app.title());
+    let title = format!(" mjolnix | user {} | {} ", app.user_id, app.title());
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
@@ -38,7 +37,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let mut hint = app.footer_hint().to_string();
     if let Some(msg) = &app.message {
-        hint = format!("⚠ {msg}  ·  {hint}");
+        hint = format!("! {msg}  .  {hint}");
     }
     let footer = Paragraph::new(hint).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(footer, area);
@@ -68,7 +67,6 @@ fn draw_repo_list(frame: &mut Frame, area: Rect, app: &App) {
         frame.render_widget(p, area);
         return;
     }
-
     let items: Vec<ListItem> = app
         .repos
         .iter()
@@ -80,7 +78,6 @@ fn draw_repo_list(frame: &mut Frame, area: Rect, app: &App) {
             ListItem::new(line)
         })
         .collect();
-
     let list = List::new(items)
         .block(panel_block("Your repositories"))
         .highlight_style(
@@ -89,8 +86,7 @@ fn draw_repo_list(frame: &mut Frame, area: Rect, app: &App) {
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("▸ ");
-
+        .highlight_symbol("> ");
     let mut state = app.repo_list;
     frame.render_stateful_widget(list, area, &mut state);
 }
@@ -107,8 +103,10 @@ fn draw_create_repo(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(""),
         Line::from(format!("  {name}")),
     ];
-    let p = Paragraph::new(text).block(panel_block("Create repository"));
-    frame.render_widget(p, area);
+    frame.render_widget(
+        Paragraph::new(text).block(panel_block("Create repository")),
+        area,
+    );
 }
 
 fn draw_repo_menu(frame: &mut Frame, area: Rect, app: &App) {
@@ -119,11 +117,10 @@ fn draw_repo_menu(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .margin(1)
     .split(area);
-
-    let summary = app.repo_build_summary();
-    let summary_p = Paragraph::new(summary).block(Block::default().borders(Borders::LEFT));
-    frame.render_widget(summary_p, chunks[0]);
-
+    frame.render_widget(
+        Paragraph::new(app.repo_build_summary()).block(Block::default().borders(Borders::LEFT)),
+        chunks[0],
+    );
     let items: Vec<ListItem> = REPO_MENU_ITEMS.iter().map(|s| ListItem::new(*s)).collect();
     let list = List::new(items)
         .block(panel_block("Actions"))
@@ -133,10 +130,9 @@ fn draw_repo_menu(frame: &mut Frame, area: Rect, app: &App) {
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("▸ ");
+        .highlight_symbol("> ");
     let mut menu_state = app.repo_menu;
     frame.render_stateful_widget(list, chunks[1], &mut menu_state);
-
     if !app.cache_lines.is_empty() {
         let cache_text: Vec<Line> = app
             .cache_lines
@@ -152,13 +148,14 @@ fn draw_repo_menu(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_build_history(frame: &mut Frame, area: Rect, app: &App) {
     if app.builds.is_empty() {
-        let p = Paragraph::new("No builds yet.")
-            .block(panel_block("Builds"))
-            .alignment(Alignment::Center);
-        frame.render_widget(p, area);
+        frame.render_widget(
+            Paragraph::new("No builds yet.")
+                .block(panel_block("Builds"))
+                .alignment(Alignment::Center),
+            area,
+        );
         return;
     }
-
     let items: Vec<ListItem> = app
         .builds
         .iter()
@@ -173,7 +170,6 @@ fn draw_build_history(frame: &mut Frame, area: Rect, app: &App) {
             ))
         })
         .collect();
-
     let list = List::new(items)
         .block(panel_block("Recent builds"))
         .highlight_style(
@@ -182,8 +178,7 @@ fn draw_build_history(frame: &mut Frame, area: Rect, app: &App) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("▸ ");
-
+        .highlight_symbol("> ");
     let mut state = app.build_list;
     frame.render_stateful_widget(list, area, &mut state);
 }
@@ -192,17 +187,13 @@ fn draw_scroll_view(frame: &mut Frame, area: Rect, app: &App) {
     let block = panel_block(&app.scroll.title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-
-    let text = app.scroll.lines.join("\n");
-    let paragraph = Paragraph::new(text)
+    let paragraph = Paragraph::new(app.scroll.lines.join("\n"))
         .wrap(Wrap { trim: false })
         .scroll((app.scroll.offset as u16, 0));
-
     frame.render_widget(paragraph, inner);
-
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-        .begin_symbol(Some("↑"))
-        .end_symbol(Some("↓"));
+        .begin_symbol(Some("^"))
+        .end_symbol(Some("v"));
     let mut scroll_state = ScrollbarState::new(app.scroll.lines.len()).position(app.scroll.offset);
     frame.render_stateful_widget(
         scrollbar,

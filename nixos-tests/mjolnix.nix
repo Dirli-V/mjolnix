@@ -34,18 +34,19 @@ pkgs.testers.runNixOSTest {
 
     services.openssh.enable = true;
 
-    # Nix is required for mjolnixd builds
     nix.enable = true;
 
-    environment.systemPackages = with pkgs; [ git ];
+    environment.systemPackages = with pkgs; [git];
   };
 
   testScript = ''
-    machine.wait_for_unit("mjolnixd.service")
+    machine.wait_for_unit("postgresql.service")
+    machine.wait_for_unit("mjolnix-postgresql-init.service")
+    machine.wait_for_unit("mjolnix-worker.service")
+    machine.wait_for_unit("mjolnix-cache.service")
     machine.wait_for_open_port(5000)
     machine.wait_for_open_port(22)
 
-    machine.succeed("test -S /var/lib/mjolnix/mjolnixd.sock")
     machine.succeed("test -d /var/lib/mjolnix/repos")
     machine.succeed("test -d /var/lib/mjolnix/stores")
     machine.succeed("id git")
@@ -53,7 +54,9 @@ pkgs.testers.runNixOSTest {
     machine.succeed("grep -q 'SetEnv MJOLNIX_DATA_DIR' /etc/ssh/sshd_config")
     machine.succeed("grep -q 'SetEnv MJOLNIX_DATABASE_URL' /etc/ssh/sshd_config")
     machine.wait_for_unit("postgresql.service")
+    machine.succeed("test -x ${package}/bin/mjolnix-frontend")
+    machine.succeed("test -x ${package}/bin/mjolnix-worker")
+    machine.succeed("test -x ${package}/bin/mjolnix-cache")
     machine.succeed("test -x ${package}/bin/mjolnix")
-    machine.succeed("test -x ${package}/bin/mjolnixd")
-    '';
+  '';
 }

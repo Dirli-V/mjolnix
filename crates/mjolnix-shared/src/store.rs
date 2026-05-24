@@ -1,12 +1,10 @@
-//! Per-repository isolated Nix stores.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use tokio::process::Command;
 
 use crate::config::Config;
-/// `local?root=…&uid=…&gid=…` store URI for a repo.
+
 pub fn store_uri(store_root: &Path, uid: u32, gid: u32) -> String {
     format!(
         "local?root={}&uid={uid}&gid={gid}",
@@ -25,10 +23,7 @@ pub fn nix_store_dir(store_root: &Path) -> PathBuf {
 pub fn substituter_url(config: &Config, namespace: &str, name: &str) -> String {
     format!(
         "http://{}:{}/r/{namespace}/{name}",
-        config.cache_host,
-        config.cache_port,
-        namespace = namespace,
-        name = name
+        config.cache_host, config.cache_port
     )
 }
 
@@ -40,7 +35,6 @@ pub async fn ensure_store_root(store_root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Find `/nix/store/{hash}-*` under a repo store root.
 pub async fn find_store_path_by_hash(store_root: &Path, hash: &str) -> Result<Option<PathBuf>> {
     let nix_store = nix_store_dir(store_root);
     if !nix_store.is_dir() {
@@ -73,14 +67,12 @@ pub async fn closure_paths(store_uri: &str, result_link: &Path) -> Result<Vec<St
         );
     }
 
-    let paths: Vec<String> = String::from_utf8_lossy(&output.stdout)
+    Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(String::from)
-        .collect();
-
-    Ok(paths)
+        .collect())
 }
 
 pub fn validate_repo_path_component(component: &str) -> Result<()> {
@@ -94,7 +86,6 @@ pub fn validate_repo_path_component(component: &str) -> Result<()> {
     Ok(())
 }
 
-/// Base32 hash prefix from a `/nix/store/HASH-name` path.
 pub fn store_path_hash(store_path: &str) -> Option<&str> {
     store_path
         .strip_prefix("/nix/store/")
@@ -109,5 +100,6 @@ pub fn validate_repo_route(namespace: &str, name: &str) -> Result<()> {
 }
 
 pub fn process_uid_gid() -> (u32, u32) {
+    // SAFETY: libc calls are thread-safe and have no preconditions.
     unsafe { (libc::geteuid(), libc::getegid()) }
 }

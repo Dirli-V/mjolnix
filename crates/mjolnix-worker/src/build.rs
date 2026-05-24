@@ -1,15 +1,13 @@
 use std::path::Path;
 use std::process::Stdio;
 
-use crate::db::DbPool;
 use anyhow::{Context, Result, bail};
+use mjolnix_shared::config::Config;
+use mjolnix_shared::db::{self, Build, DbPool, Repo, RepoStore};
+use mjolnix_shared::store;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
-
-use crate::config::Config;
-use crate::db::{self, Build, Repo, RepoStore};
-use crate::store;
 
 pub async fn run_build(
     config: &Config,
@@ -30,7 +28,6 @@ pub async fn run_build(
 
     let repo_store =
         db::ensure_repo_store(pool, config, repo.id, &repo.namespace, &repo.name, uid, gid).await?;
-
     let repo_path = config.repo_disk_path(&repo.namespace, &repo.name);
     let work_path = config.build_work_path(build.repo_id, &build.rev);
 
@@ -72,7 +69,6 @@ async fn run_build_inner(
     tokio::fs::create_dir_all(work_path)
         .await
         .with_context(|| format!("create workdir {}", work_path.display()))?;
-
     materialize_rev(repo_path, rev, work_path).await?;
 
     let mut log_file = tokio::fs::OpenOptions::new()
@@ -87,7 +83,6 @@ async fn run_build_inner(
         .write_all(format!("--- nix build (store: {}) ---\n", repo_store.store_uri).as_bytes())
         .await
         .context("write log")?;
-
     log_file
         .write_all(format!("--- substituter: {} ---\n", repo_store.substituter_url).as_bytes())
         .await
@@ -95,7 +90,6 @@ async fn run_build_inner(
 
     let flake_path = format!("{}#", work_path.display());
     let result_link = work_path.join("result");
-
     let mut cmd = Command::new("nix");
     cmd.args([
         "build",
@@ -125,12 +119,10 @@ async fn run_build_inner(
             .ok();
     }
 
-    let duration = Duration::from_secs(config.build_timeout_secs);
-    let output = timeout(duration, cmd.output())
+    let output = timeout(Duration::from_secs(config.build_timeout_secs), cmd.output())
         .await
         .context("build timed out")?
         .context("run nix build")?;
-
     log_file.write_all(&output.stdout).await.ok();
     log_file.write_all(&output.stderr).await.ok();
 
@@ -142,7 +134,6 @@ async fn run_build_inner(
             truncate_summary(&stderr)
         );
     }
-
     Ok(())
 }
 
@@ -153,7 +144,6 @@ async fn materialize_rev(repo_path: &Path, rev: &str, work_path: &Path) -> Resul
         .output()
         .await
         .context("git archive")?;
-
     if !output.status.success() {
         bail!(
             "git archive failed: {}",
@@ -167,7 +157,6 @@ async fn materialize_rev(repo_path: &Path, rev: &str, work_path: &Path) -> Resul
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-
     let mut child = tar.spawn().context("spawn tar")?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
@@ -175,12 +164,10 @@ async fn materialize_rev(repo_path: &Path, rev: &str, work_path: &Path) -> Resul
             .await
             .context("write tar stdin")?;
     }
-
     let status = child.wait().await.context("wait tar")?;
     if !status.success() {
         bail!("tar extract failed");
     }
-
     Ok(())
 }
 
@@ -200,6 +187,6 @@ fn truncate_summary(s: &str) -> String {
     if line.len() <= MAX {
         line.to_string()
     } else {
-        format!("{}…", &line[..MAX])
+        format!("{}...", &line[..MAX])
     }
 }

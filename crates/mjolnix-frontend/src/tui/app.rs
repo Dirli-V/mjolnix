@@ -1,14 +1,14 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::db::{self, Build, BuildStatus, DbPool, Repo, RepoStore};
 use anyhow::{Context, Result, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use mjolnix_shared::config::{self, Config};
+use mjolnix_shared::db::{self, Build, BuildStatus, DbPool, Repo, RepoStore};
+use mjolnix_shared::store;
 use ratatui::widgets::ListState;
 
-use crate::config::{self, Config};
 use crate::hook;
-use crate::store;
 
 pub const REPO_MENU_ITEMS: &[&str] = &[
     "List files on default branch",
@@ -118,15 +118,15 @@ impl App {
         match self.screen {
             Screen::RepoList => {
                 if self.repos.is_empty() {
-                    "n new repository  ·  q quit"
+                    "n new repository  .  q quit"
                 } else {
-                    "↑↓ move  ·  Enter open  ·  n new  ·  q quit"
+                    "up/down move  .  Enter open  .  n new  .  q quit"
                 }
             }
-            Screen::CreateRepo => "Enter create  ·  Esc cancel  ·  type name",
-            Screen::RepoMenu => "↑↓ move  ·  Enter select  ·  Esc back  ·  q quit",
-            Screen::BuildHistory => "↑↓ move  ·  Enter details  ·  Esc back",
-            Screen::ScrollView => "↑↓/PgUp/PgDn scroll  ·  Esc back",
+            Screen::CreateRepo => "Enter create  .  Esc cancel  .  type name",
+            Screen::RepoMenu => "up/down move  .  Enter select  .  Esc back  .  q quit",
+            Screen::BuildHistory => "up/down move  .  Enter details  .  Esc back",
+            Screen::ScrollView => "up/down/PgUp/PgDn scroll  .  Esc back",
         }
     }
 
@@ -138,7 +138,7 @@ impl App {
     ) -> Result<()> {
         self.message = None;
         match self.screen {
-            Screen::RepoList => self.key_repo_list(key, config, pool).await?,
+            Screen::RepoList => self.key_repo_list(key, pool).await?,
             Screen::CreateRepo => self.key_create_repo(key, config, pool).await?,
             Screen::RepoMenu => self.key_repo_menu(key, config, pool).await?,
             Screen::BuildHistory => self.key_build_history(key, pool).await?,
@@ -147,12 +147,7 @@ impl App {
         Ok(())
     }
 
-    async fn key_repo_list(
-        &mut self,
-        key: KeyEvent,
-        _config: &Config,
-        pool: &DbPool,
-    ) -> Result<()> {
+    async fn key_repo_list(&mut self, key: KeyEvent, pool: &DbPool) -> Result<()> {
         match key.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('n') | KeyCode::Char('N') => {
@@ -183,9 +178,7 @@ impl App {
         match key.code {
             KeyCode::Esc => self.screen = Screen::RepoList,
             KeyCode::Enter => match self.submit_create_repo(config, pool).await {
-                Ok(()) => {
-                    self.reload_repos(pool).await?;
-                }
+                Ok(()) => self.reload_repos(pool).await?,
                 Err(e) => self.message = Some(format!("{e:#}")),
             },
             KeyCode::Backspace => {
@@ -276,17 +269,13 @@ impl App {
         match key.code {
             KeyCode::Esc => self.screen = self.scroll_return,
             KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll.offset = (self.scroll.offset + 1).min(max);
+                self.scroll.offset = (self.scroll.offset + 1).min(max)
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll.offset = self.scroll.offset.saturating_sub(1);
+                self.scroll.offset = self.scroll.offset.saturating_sub(1)
             }
-            KeyCode::PageDown => {
-                self.scroll.offset = (self.scroll.offset + 10).min(max);
-            }
-            KeyCode::PageUp => {
-                self.scroll.offset = self.scroll.offset.saturating_sub(10);
-            }
+            KeyCode::PageDown => self.scroll.offset = (self.scroll.offset + 10).min(max),
+            KeyCode::PageUp => self.scroll.offset = self.scroll.offset.saturating_sub(10),
             KeyCode::Home => self.scroll.offset = 0,
             KeyCode::End => self.scroll.offset = max,
             _ => {}
@@ -318,7 +307,6 @@ impl App {
         let i = self.repo_list.selected()?;
         self.repos.get(i)
     }
-
     fn selected_build(&self) -> Option<&Build> {
         let i = self.build_list.selected()?;
         self.builds.get(i)
@@ -395,8 +383,8 @@ impl App {
 
     pub fn repo_build_summary(&self) -> String {
         match &self.latest_build {
-            Some(b) => format!("Latest build #{} — {}", b.id, b.status.as_str()),
-            None => "No builds yet — push a branch with flake.nix".into(),
+            Some(b) => format!("Latest build #{} - {}", b.id, b.status.as_str()),
+            None => "No builds yet - push a branch with flake.nix".into(),
         }
     }
 
@@ -406,18 +394,15 @@ impl App {
             bail!("repository name cannot be empty");
         }
         config::validate_repo_name(&name)?;
-
         const NAMESPACE: &str = "public";
         let disk_path = config.repo_disk_path(NAMESPACE, &name);
         if disk_path.exists() {
             bail!("repository already exists at {}", disk_path.display());
         }
-
         if let Some(parent) = disk_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create {}", parent.display()))?;
         }
-
         let status = Command::new("git")
             .args(["init", "--bare", &disk_path.to_string_lossy()])
             .status()
@@ -425,7 +410,6 @@ impl App {
         if !status.success() {
             bail!("git init --bare failed");
         }
-
         let (uid, gid) = store::process_uid_gid();
         let repo_id =
             db::create_repo(pool, config, self.user_id, NAMESPACE, &name, uid, gid).await?;
@@ -438,7 +422,7 @@ impl App {
         if let Some(repo_store) = db::get_repo_store(pool, repo_id).await? {
             lines.extend(repo_cache_hint_lines(&repo_store));
         }
-        lines.push("Start mjolnixd to build flakes on push: mjolnixd".into());
+        lines.push("Start worker for builds: mjolnix-worker".into());
         self.show_scroll(Screen::RepoList, "Repository created", lines);
         Ok(())
     }
@@ -459,13 +443,11 @@ fn list_repo_tree_lines(repo_path: &Path) -> Result<Vec<String>> {
         ])
         .output()
         .context("resolve HEAD")?;
-
     if !head.status.success() {
         return Ok(vec![
-            "(empty repository — push commits with git first)".into(),
+            "(empty repository - push commits with git first)".into(),
         ]);
     }
-
     let output = Command::new("git")
         .args([
             "--git-dir",
@@ -477,11 +459,9 @@ fn list_repo_tree_lines(repo_path: &Path) -> Result<Vec<String>> {
         ])
         .output()
         .context("git ls-tree")?;
-
     if !output.status.success() {
         bail!("git ls-tree failed");
     }
-
     let listing = String::from_utf8_lossy(&output.stdout);
     if listing.trim().is_empty() {
         return Ok(vec!["(no files at HEAD)".into()]);
@@ -508,7 +488,7 @@ fn repo_cache_hint_lines(repo_store: &RepoStore) -> Vec<String> {
     match &repo_store.cache_public_key {
         Some(pk) => lines.push(format!("  trusted-public-keys = {pk}")),
         None => lines.push(
-            "  trusted-public-keys = <unavailable — enable cache and ensure nix is installed>"
+            "  trusted-public-keys = <unavailable - enable cache and ensure nix is installed>"
                 .into(),
         ),
     }
@@ -540,7 +520,7 @@ async fn build_detail_lines(pool: &DbPool, repo_id: i64, build: &Build) -> Resul
             }
             if paths.len() > 5 {
                 lines.push(format!(
-                    "    … and {} more paths in closure",
+                    "    ... and {} more paths in closure",
                     paths.len() - 5
                 ));
             }

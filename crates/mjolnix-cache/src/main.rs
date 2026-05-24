@@ -1,59 +1,59 @@
-//! Per-repo HTTP binary cache (Nix narinfo / nar protocol).
-
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use axum::Router;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use axum::{Router, routing};
+use mjolnix_shared::config::Config;
+use mjolnix_shared::db::{self, DbPool, RepoStore};
+use mjolnix_shared::signing::{self, CacheSigningKey};
+use mjolnix_shared::store;
 use serde::Deserialize;
 use tokio::process::Command;
 
-use crate::config::Config;
-use crate::db::{self, DbPool, RepoStore};
-use crate::signing::CacheSigningKey;
-use crate::store;
-
 #[derive(Clone)]
-pub struct CacheState {
-    pub pool: DbPool,
-    pub config: Arc<Config>,
-    pub signing_key: Arc<CacheSigningKey>,
+struct CacheState {
+    pool: DbPool,
+    signing_key: Arc<CacheSigningKey>,
 }
 
-pub async fn run_server(
-    config: Arc<Config>,
-    pool: DbPool,
-    signing_key: CacheSigningKey,
-) -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
+    let config = Config::from_env()?;
+    config.ensure_dirs()?;
+    let pool = db::connect(&config).await?;
+    db::migrate(&pool).await?;
+
+    let signing_key =
+        signing::load_or_create_secret_key(&config.cache_sign_key_path, &config.cache_key_name)
+            .await?;
+    signing::publish_cache_public_keys(&config, &pool).await?;
+
+    run_server(&config, pool, signing_key).await
+}
+
+async fn run_server(config: &Config, pool: DbPool, signing_key: CacheSigningKey) -> Result<()> {
     let state = CacheState {
         pool,
-        config: Arc::clone(&config),
         signing_key: Arc::new(signing_key),
     };
-
     let app = Router::new()
-        .route("/r/{namespace}/{name}/{*rest}", axum::routing::get(serve))
+        .route("/r/{namespace}/{name}/{*rest}", routing::get(serve))
         .with_state(state);
-
     let addr: SocketAddr = config
         .cache_bind
         .parse()
         .with_context(|| format!("parse cache bind {}", config.cache_bind))?;
-
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind binary cache on {addr}"))?;
-
     eprintln!("mjolnix-cache: listening on http://{addr}");
-
     axum::serve(listener, app)
         .await
         .context("binary cache server")?;
-
     Ok(())
 }
 
@@ -62,12 +62,10 @@ async fn serve(
     AxumPath((namespace, name, rest)): AxumPath<(String, String, String)>,
 ) -> Result<Response, CacheError> {
     store::validate_repo_route(&namespace, &name).map_err(CacheError::bad_request)?;
-
     let repo = db::get_repo(&state.pool, &namespace, &name)
         .await
         .map_err(CacheError::internal)?
         .ok_or_else(|| CacheError::not_found("repository not found"))?;
-
     let repo_store = db::get_repo_store(&state.pool, repo.id)
         .await
         .map_err(CacheError::internal)?
@@ -78,14 +76,12 @@ async fn serve(
         let hash = rest.strip_suffix(".narinfo").unwrap_or(rest);
         return serve_narinfo(&state, &repo_store, hash).await;
     }
-
     if let Some(hash) = rest
         .strip_prefix("nar/")
         .and_then(|s| s.strip_suffix(".nar.xz"))
     {
         return serve_nar(&repo_store, hash).await;
     }
-
     Err(CacheError::not_found("unknown cache path"))
 }
 
@@ -98,18 +94,14 @@ async fn serve_narinfo(
         .await
         .map_err(CacheError::internal)?
         .ok_or_else(|| CacheError::not_found("store path not found"))?;
-
     let store_path_str = store_path.to_string_lossy();
     let info = path_info(&repo_store.store_uri, &store_path_str)
         .await
         .map_err(CacheError::internal)?;
-
     let path_hash = store::store_path_hash(&info.store_path).unwrap_or(hash);
-
     let file_hash = nar_file_hash(&repo_store.store_uri, &store_path_str)
         .await
         .map_err(CacheError::internal)?;
-
     let refs: Vec<_> = info
         .references
         .iter()
@@ -121,9 +113,7 @@ async fn serve_narinfo(
     if let Some(deriver) = &info.deriver {
         body.push_str(&format!("Deriver: {deriver}\n"));
     }
-    body.push_str("URL: nar/");
-    body.push_str(path_hash);
-    body.push_str(".nar.xz\n");
+    body.push_str(&format!("URL: nar/{path_hash}.nar.xz\n"));
     body.push_str("Compression: xz\n");
     body.push_str(&format!("FileHash: {file_hash}\n"));
     body.push_str(&format!("NarHash: {}\n", info.nar_hash));
@@ -153,7 +143,6 @@ async fn serve_nar(repo_store: &RepoStore, hash: &str) -> Result<Response, Cache
         .await
         .map_err(CacheError::internal)?
         .ok_or_else(|| CacheError::not_found("store path not found"))?;
-
     let store_path_str = store_path.to_string_lossy();
     let script = format!(
         "exec nix-store --store '{}' --dump '{}' | xz -c",
@@ -171,7 +160,6 @@ async fn serve_nar(repo_store: &RepoStore, hash: &str) -> Result<Response, Cache
             String::from_utf8_lossy(&output.stderr)
         )));
     }
-
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/x-nix-archive")],
@@ -207,21 +195,16 @@ async fn path_info(store_uri: &str, store_path: &str) -> Result<PathInfo> {
         .output()
         .await
         .context("nix path-info")?;
-
     if !output.status.success() {
         bail!(
             "nix path-info failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
-
     let map: serde_json::Map<String, serde_json::Value> =
         serde_json::from_slice(&output.stdout).context("parse path-info json")?;
-
     let (path, value) = map.into_iter().next().context("empty path-info response")?;
-
     let entry: PathInfoEntry = serde_json::from_value(value).context("parse path-info entry")?;
-
     Ok(PathInfo {
         store_path: path,
         nar_hash: entry.nar_hash,
@@ -264,14 +247,12 @@ impl CacheError {
             message: msg.into(),
         }
     }
-
     fn bad_request(err: anyhow::Error) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: err.to_string(),
         }
     }
-
     fn internal(err: impl Into<anyhow::Error>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,

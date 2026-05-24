@@ -5,8 +5,7 @@ use sqlx::types::Json;
 use sqlx::{PgPool, Row};
 
 use crate::config::Config;
-use crate::signing;
-use crate::store;
+use crate::{signing, store};
 
 pub type DbPool = PgPool;
 
@@ -83,7 +82,7 @@ pub async fn connect(config: &Config) -> Result<DbPool> {
 }
 
 pub async fn migrate(pool: &DbPool) -> Result<()> {
-    sqlx::migrate!().run(pool).await?;
+    sqlx::migrate!("../../migrations").run(pool).await?;
     Ok(())
 }
 
@@ -113,11 +112,9 @@ pub async fn attach_key(pool: &DbPool, fingerprint: &str, user_id: i64) -> Resul
 
 pub async fn get_or_create_dev_user(pool: &DbPool) -> Result<i64> {
     const DEV_FINGERPRINT: &str = "dev:local";
-
     if let Some(id) = user_id_for_fingerprint(pool, DEV_FINGERPRINT).await? {
         return Ok(id);
     }
-
     let user_id = create_user(pool).await?;
     attach_key(pool, DEV_FINGERPRINT, user_id).await?;
     Ok(user_id)
@@ -130,7 +127,6 @@ pub async fn list_repos_for_user(pool: &DbPool, user_id: i64) -> Result<Vec<Repo
     .bind(user_id)
     .fetch_all(pool)
     .await?;
-
     Ok(rows
         .into_iter()
         .map(|r| Repo {
@@ -148,7 +144,6 @@ pub async fn get_repo(pool: &DbPool, namespace: &str, name: &str) -> Result<Opti
             .bind(name)
             .fetch_optional(pool)
             .await?;
-
     Ok(row.map(|r| Repo {
         id: r.get("id"),
         namespace: r.get("namespace"),
@@ -173,7 +168,6 @@ pub async fn create_repo(
     .bind(name)
     .fetch_one(pool)
     .await?;
-
     ensure_repo_store(pool, config, repo_id, namespace, name, uid, gid).await?;
     Ok(repo_id)
 }
@@ -185,7 +179,6 @@ pub async fn get_repo_store(pool: &DbPool, repo_id: i64) -> Result<Option<RepoSt
     .bind(repo_id)
     .fetch_optional(pool)
     .await?;
-
     Ok(row.map(|r| RepoStore {
         repo_id: r.get("repo_id"),
         store_root: r.get("store_root"),
@@ -212,7 +205,6 @@ pub async fn ensure_repo_store(
             .await?
             .context("repo store row missing after publish");
     }
-
     let store_root = store::store_root_for_repo(config, repo_id);
     store::ensure_store_root(&store_root).await?;
     let store_uri = store::store_uri(&store_root, uid, gid);
@@ -237,25 +229,9 @@ pub async fn ensure_repo_store(
     .await?;
 
     signing::publish_cache_public_keys(config, pool).await?;
-
     get_repo_store(pool, repo_id)
         .await?
         .context("repo store row missing after insert")
-}
-
-pub async fn set_repo_store_cache_public_key(
-    pool: &DbPool,
-    repo_id: i64,
-    public_key: &str,
-) -> Result<()> {
-    sqlx::query(
-        "UPDATE repo_stores SET cache_public_key = $1, updated_at = NOW() WHERE repo_id = $2",
-    )
-    .bind(public_key)
-    .bind(repo_id)
-    .execute(pool)
-    .await?;
-    Ok(())
 }
 
 pub async fn set_all_repo_store_cache_public_keys(pool: &DbPool, public_key: &str) -> Result<()> {
@@ -350,15 +326,6 @@ pub async fn get_build(pool: &DbPool, build_id: i64) -> Result<Option<Build>> {
     Ok(row.map(|r| row_to_build(&r)))
 }
 
-pub async fn latest_build_for_repo(pool: &DbPool, repo_id: i64) -> Result<Option<Build>> {
-    let row =
-        sqlx::query("SELECT * FROM builds WHERE repo_id = $1 ORDER BY created_at DESC LIMIT 1")
-            .bind(repo_id)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|r| row_to_build(&r)))
-}
-
 pub async fn list_builds_for_repo(pool: &DbPool, repo_id: i64, limit: i64) -> Result<Vec<Build>> {
     let rows =
         sqlx::query("SELECT * FROM builds WHERE repo_id = $1 ORDER BY created_at DESC LIMIT $2")
@@ -367,6 +334,15 @@ pub async fn list_builds_for_repo(pool: &DbPool, repo_id: i64, limit: i64) -> Re
             .fetch_all(pool)
             .await?;
     Ok(rows.iter().map(row_to_build).collect())
+}
+
+pub async fn latest_build_for_repo(pool: &DbPool, repo_id: i64) -> Result<Option<Build>> {
+    let row =
+        sqlx::query("SELECT * FROM builds WHERE repo_id = $1 ORDER BY created_at DESC LIMIT 1")
+            .bind(repo_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|r| row_to_build(&r)))
 }
 
 pub async fn list_queued_build_ids(pool: &DbPool) -> Result<Vec<i64>> {

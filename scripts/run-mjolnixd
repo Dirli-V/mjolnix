@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start mjolnixd with repo-local defaults (for local development).
+# Start mjolnix-worker and mjolnix-cache (local development).
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,10 +9,21 @@ source "${script_dir}/lib.sh"
 export MJOLNIX_DATA_DIR="${MJOLNIX_DATA_DIR:-$(mjolnix_default_data_dir)}"
 
 repo_root="$(cd "${script_dir}/.." && pwd)"
-if [[ -x "${repo_root}/target/debug/mjolnixd" ]]; then
-  exec "${repo_root}/target/debug/mjolnixd"
-elif [[ -x "${repo_root}/target/release/mjolnixd" ]]; then
-  exec "${repo_root}/target/release/mjolnixd"
+
+worker="${repo_root}/target/debug/mjolnix-worker"
+cache="${repo_root}/target/debug/mjolnix-cache"
+if [[ ! -x "$worker" ]]; then
+  worker="${repo_root}/target/release/mjolnix-worker"
+  cache="${repo_root}/target/release/mjolnix-cache"
 fi
 
-exec mjolnixd
+if [[ ! -x "$worker" ]]; then
+  echo "run-mjolnixd: build binaries first (cargo build -p mjolnix-worker -p mjolnix-cache)" >&2
+  exit 1
+fi
+
+echo "run-mjolnixd: starting mjolnix-worker and mjolnix-cache (Ctrl+C stops both)"
+trap 'kill 0' EXIT
+"$worker" &
+"$cache" &
+wait

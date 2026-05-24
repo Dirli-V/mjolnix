@@ -3,12 +3,11 @@ mod ui;
 
 use std::time::Duration;
 
-use crate::db::DbPool;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyEventKind};
+use mjolnix_shared::config::Config;
+use mjolnix_shared::db::DbPool;
 use ratatui::DefaultTerminal;
-
-use crate::config::Config;
 
 use app::App;
 
@@ -34,7 +33,6 @@ async fn run_loop(
 ) -> Result<()> {
     while !app.quit {
         terminal.draw(|frame| ui::draw(frame, app))?;
-
         if !event::poll(Duration::from_millis(200))? {
             continue;
         }
