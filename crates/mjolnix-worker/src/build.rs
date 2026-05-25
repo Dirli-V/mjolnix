@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use mjolnix_shared::config::Config;
 use mjolnix_shared::db::{self, Build, DbPool, Repo, RepoStore};
 use mjolnix_shared::store;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
@@ -119,18 +119,51 @@ async fn run_build_inner(
             .ok();
     }
 
-    let output = timeout(Duration::from_secs(config.build_timeout_secs), cmd.output())
-        .await
-        .context("build timed out")?
-        .context("run nix build")?;
-    log_file.write_all(&output.stdout).await.ok();
-    log_file.write_all(&output.stderr).await.ok();
+    let mut child = cmd.spawn().context("spawn nix build")?;
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let build_fut = async {
+        let read_out = async {
+            let mut buf = Vec::new();
+            if let Some(out) = stdout.as_mut() {
+                out.read_to_end(&mut buf)
+                    .await
+                    .context("read nix stdout")?;
+            }
+            Ok::<Vec<u8>, anyhow::Error>(buf)
+        };
+        let read_err = async {
+            let mut buf = Vec::new();
+            if let Some(err) = stderr.as_mut() {
+                err.read_to_end(&mut buf)
+                    .await
+                    .context("read nix stderr")?;
+            }
+            Ok::<Vec<u8>, anyhow::Error>(buf)
+        };
+        let (status, stdout_bytes, stderr_bytes) =
+            tokio::join!(child.wait(), read_out, read_err);
+        let status = status.context("wait nix build")?;
+        Ok::<_, anyhow::Error>((status, stdout_bytes?, stderr_bytes?))
+    };
+
+    let (status, stdout_bytes, stderr_bytes): (std::process::ExitStatus, Vec<u8>, Vec<u8>) = timeout(
+        Duration::from_secs(config.build_timeout_secs),
+        build_fut,
+    )
+    .await
+    .context("build timed out")?
+    .context("run nix build")?;
+
+    log_file.write_all(&stdout_bytes).await.ok();
+    log_file.write_all(&stderr_bytes).await.ok();
+
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr_bytes);
         bail!(
             "nix build failed (exit {:?}): {}",
-            output.status.code(),
+            status.code(),
             truncate_summary(&stderr)
         );
     }

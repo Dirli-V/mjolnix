@@ -9,6 +9,12 @@ use crate::{signing, store};
 
 pub type DbPool = PgPool;
 
+/// `LISTEN` channel; workers wake when new builds are queued or requeued.
+pub const BUILD_QUEUED_CHANNEL: &str = "mjolnix_build_queued";
+
+pub const BUILD_HEARTBEAT_INTERVAL_SECS: u64 = 10;
+pub const BUILD_HEARTBEAT_STALE_SECS: u64 = 30;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildStatus {
     Queued,
@@ -71,6 +77,7 @@ pub struct Build {
     pub error_summary: Option<String>,
     pub closure_paths: Option<Vec<String>>,
     pub created_at: DateTime<Utc>,
+    pub last_heartbeat: Option<DateTime<Utc>>,
 }
 
 pub async fn connect(config: &Config) -> Result<DbPool> {
@@ -261,13 +268,21 @@ pub async fn user_owns_repo(
     Ok(row.is_some())
 }
 
+pub async fn notify_build_queued(pool: &DbPool) -> Result<()> {
+    sqlx::query("SELECT pg_notify($1, '')")
+        .bind(BUILD_QUEUED_CHANNEL)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn insert_build_queued(
     pool: &DbPool,
     repo_id: i64,
     rev: &str,
     ref_name: &str,
 ) -> Result<i64> {
-    sqlx::query_scalar(
+    let id = sqlx::query_scalar(
         "INSERT INTO builds (repo_id, rev, ref_name, status) VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(repo_id)
@@ -275,17 +290,21 @@ pub async fn insert_build_queued(
     .bind(ref_name)
     .bind(BuildStatus::Queued.as_str())
     .fetch_one(pool)
-    .await
-    .map_err(Into::into)
+    .await?;
+    notify_build_queued(pool).await?;
+    Ok(id)
 }
 
 pub async fn set_build_running(pool: &DbPool, build_id: i64, log_path: &str) -> Result<()> {
-    sqlx::query("UPDATE builds SET status = $1, started_at = NOW(), log_path = $2 WHERE id = $3")
-        .bind(BuildStatus::Running.as_str())
-        .bind(log_path)
-        .bind(build_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE builds SET status = $1, started_at = NOW(), log_path = $2, last_heartbeat = NOW() WHERE id = $3 AND status = $4",
+    )
+    .bind(BuildStatus::Running.as_str())
+    .bind(log_path)
+    .bind(build_id)
+    .bind(BuildStatus::Running.as_str())
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -296,11 +315,12 @@ pub async fn set_build_success(
 ) -> Result<()> {
     let paths = Json(closure_paths.to_vec());
     sqlx::query(
-        "UPDATE builds SET status = $1, finished_at = NOW(), closure_paths = $2, error_summary = NULL WHERE id = $3",
+        "UPDATE builds SET status = $1, finished_at = NOW(), closure_paths = $2, error_summary = NULL WHERE id = $3 AND status = $4",
     )
     .bind(BuildStatus::Success.as_str())
     .bind(paths)
     .bind(build_id)
+    .bind(BuildStatus::Running.as_str())
     .execute(pool)
     .await?;
     Ok(())
@@ -308,11 +328,12 @@ pub async fn set_build_success(
 
 pub async fn set_build_failed(pool: &DbPool, build_id: i64, error_summary: &str) -> Result<()> {
     sqlx::query(
-        "UPDATE builds SET status = $1, finished_at = NOW(), error_summary = $2 WHERE id = $3",
+        "UPDATE builds SET status = $1, finished_at = NOW(), error_summary = $2 WHERE id = $3 AND status = $4",
     )
     .bind(BuildStatus::Failed.as_str())
     .bind(error_summary)
     .bind(build_id)
+    .bind(BuildStatus::Running.as_str())
     .execute(pool)
     .await?;
     Ok(())
@@ -345,20 +366,53 @@ pub async fn latest_build_for_repo(pool: &DbPool, repo_id: i64) -> Result<Option
     Ok(row.map(|r| row_to_build(&r)))
 }
 
-pub async fn list_queued_build_ids(pool: &DbPool) -> Result<Vec<i64>> {
-    let rows = sqlx::query("SELECT id FROM builds WHERE status = $1 ORDER BY created_at ASC")
-        .bind(BuildStatus::Queued.as_str())
-        .fetch_all(pool)
-        .await?;
-    Ok(rows.into_iter().map(|r| r.get("id")).collect())
+/// Atomically claim the oldest queued build for this worker (safe across multiple workers).
+pub async fn claim_next_queued_build(pool: &DbPool) -> Result<Option<Build>> {
+    let row = sqlx::query(
+        r#"
+        UPDATE builds
+        SET status = $1, started_at = NOW(), last_heartbeat = NOW()
+        WHERE id = (
+            SELECT id FROM builds
+            WHERE status = $2
+            ORDER BY created_at
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        )
+        RETURNING *
+        "#,
+    )
+    .bind(BuildStatus::Running.as_str())
+    .bind(BuildStatus::Queued.as_str())
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| row_to_build(&r)))
 }
 
-pub async fn requeue_stale_running_builds(pool: &DbPool) -> Result<u64> {
+pub async fn touch_build_heartbeat(pool: &DbPool, build_id: i64) -> Result<()> {
+    sqlx::query("UPDATE builds SET last_heartbeat = NOW() WHERE id = $1 AND status = $2")
+        .bind(build_id)
+        .bind(BuildStatus::Running.as_str())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Mark running builds whose heartbeat is older than [`BUILD_HEARTBEAT_STALE_SECS`] as failed.
+pub async fn fail_stale_running_builds(pool: &DbPool) -> Result<u64> {
     let result = sqlx::query(
-        "UPDATE builds SET status = $1, started_at = NULL, finished_at = NULL, log_path = NULL, error_summary = NULL WHERE status = $2",
+        r#"
+        UPDATE builds
+        SET status = $1, finished_at = NOW(), error_summary = $2
+        WHERE status = $3
+          AND last_heartbeat IS NOT NULL
+          AND last_heartbeat < NOW() - ($4::bigint * INTERVAL '1 second')
+        "#,
     )
-    .bind(BuildStatus::Queued.as_str())
+    .bind(BuildStatus::Failed.as_str())
+    .bind("worker heartbeat timeout")
     .bind(BuildStatus::Running.as_str())
+    .bind(BUILD_HEARTBEAT_STALE_SECS as i64)
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
@@ -380,5 +434,6 @@ fn row_to_build(r: &PgRow) -> Build {
         error_summary: r.get("error_summary"),
         closure_paths: closure_paths.map(|j| j.0),
         created_at: r.get("created_at"),
+        last_heartbeat: r.get("last_heartbeat"),
     }
 }

@@ -11,7 +11,7 @@ The codebase is a Cargo workspace with separate binaries that share PostgreSQL s
 | Crate / binary | Role |
 |----------------|------|
 | `mjolnix-frontend` | SSH git wrapper, interactive TUI, `post-receive` hooks |
-| `mjolnix-worker` | Polls queued builds in Postgres and runs `nix build` |
+| `mjolnix-worker` | Claims queued builds in Postgres (`LISTEN` + `SKIP LOCKED`) and runs `nix build` |
 | `mjolnix-cache` | HTTP binary cache (`narinfo` / `nar`) per repository |
 | `mjolnix-shared` | Config, database access, store paths, cache signing (library) |
 
@@ -134,7 +134,7 @@ flowchart LR
   TUI --> frontend
   Git --> Hook
   Hook -->|INSERT build queued| DB
-  worker -->|poll queued| DB
+  worker -->|LISTEN + claim queued| DB
   worker --> Build
   Build -->|UPDATE success / failed| DB
   HTTP -->|repo_stores metadata| DB
