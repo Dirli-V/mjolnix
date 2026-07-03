@@ -5,8 +5,8 @@ use mjolnix_shared::config::Config;
 use mjolnix_shared::db::{self, Build, BuildStatus, DbPool};
 use mjolnix_shared::signing;
 use mjolnix_shared::store;
-use sqlx::postgres::PgListener;
 use sqlx::Row;
+use sqlx::postgres::PgListener;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::time;
 
@@ -85,7 +85,11 @@ async fn fill_slots(
     gid: u32,
 ) -> Result<()> {
     loop {
-        let permit = semaphore.clone().acquire_owned().await.context("semaphore")?;
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .context("semaphore")?;
         let build = db::claim_next_queued_build(&pool).await?;
         let Some(build) = build else {
             drop(permit);
@@ -106,9 +110,8 @@ async fn fill_slots(
 
 fn spawn_stale_build_checker(pool: Arc<DbPool>) {
     tokio::spawn(async move {
-        let mut interval = time::interval(time::Duration::from_secs(
-            db::BUILD_HEARTBEAT_INTERVAL_SECS,
-        ));
+        let mut interval =
+            time::interval(time::Duration::from_secs(db::BUILD_HEARTBEAT_INTERVAL_SECS));
         interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
@@ -132,21 +135,20 @@ async fn run_build_task(
     uid: u32,
     gid: u32,
 ) {
-    let _permit = permit;
     let build_id = build.id;
     let heartbeat = spawn_build_heartbeat(Arc::clone(&pool), build_id);
     if let Err(err) = run_one_build(&config, &pool, &build, uid, gid).await {
         eprintln!("mjolnix-worker: build {build_id} failed: {err:#}");
     }
     heartbeat.abort();
+    drop(permit);
     let _ = slot_free_tx.send(());
 }
 
 fn spawn_build_heartbeat(pool: Arc<DbPool>, build_id: i64) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut interval = time::interval(time::Duration::from_secs(
-            db::BUILD_HEARTBEAT_INTERVAL_SECS,
-        ));
+        let mut interval =
+            time::interval(time::Duration::from_secs(db::BUILD_HEARTBEAT_INTERVAL_SECS));
         interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
