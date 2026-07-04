@@ -137,10 +137,10 @@ flowchart LR
   worker -->|LISTEN + claim queued| DB
   worker --> Build
   Build -->|UPDATE success / failed| DB
-  HTTP -->|repo_stores metadata| DB
+  HTTP -->|repos + builds| DB
   clients -->|substituter fetch| HTTP
 ```
 
-- **PostgreSQL** — users, SSH keys, repos, `repo_stores`, builds (`closure_paths` JSONB on success)
+- **PostgreSQL** — users, SSH keys, repos, builds (`closure_paths` JSONB on success)
 - Push with `flake.nix` → `post-receive` queues a build row → **worker** runs `nix build`
-- **Cache** reads store paths from the database and serves artifacts built into each repo store
+- **Cache** derives per-repo store paths from repo id and config, serving artifacts from disk

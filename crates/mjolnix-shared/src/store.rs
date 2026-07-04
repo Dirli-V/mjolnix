@@ -4,6 +4,33 @@ use anyhow::{Context, Result, bail};
 use tokio::process::Command;
 
 use crate::config::Config;
+use crate::db::Repo;
+
+#[derive(Debug, Clone)]
+pub struct RepoStore {
+    pub repo_id: i64,
+    pub store_root: String,
+    pub store_uri: String,
+    pub substituter_url: String,
+    pub cache_public_key: Option<String>,
+}
+
+pub fn repo_store(
+    config: &Config,
+    repo: &Repo,
+    uid: u32,
+    gid: u32,
+    cache_public_key: Option<String>,
+) -> RepoStore {
+    let store_root_path = store_root_for_repo(config, repo.id);
+    RepoStore {
+        repo_id: repo.id,
+        store_root: store_root_path.to_string_lossy().into_owned(),
+        store_uri: store_uri(&store_root_path, uid, gid),
+        substituter_url: substituter_url(config, &repo.namespace, &repo.name),
+        cache_public_key,
+    }
+}
 
 pub fn store_uri(store_root: &Path, uid: u32, gid: u32) -> String {
     format!(

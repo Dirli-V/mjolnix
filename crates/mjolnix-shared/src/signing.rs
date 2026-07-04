@@ -8,8 +8,6 @@ use ed25519_dalek::SigningKey;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::db::DbPool;
-
 #[derive(Clone, Debug)]
 pub struct CacheSigningKey {
     pub name: String,
@@ -23,6 +21,13 @@ impl CacheSigningKey {
         let sig = self.signing_key.sign(body.as_bytes());
         format!("{}:{}", self.name, STANDARD.encode(sig.to_bytes()))
     }
+}
+
+pub async fn try_load_secret_key(path: &Path) -> Result<Option<CacheSigningKey>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    parse_secret_key_file(path).await.map(Some)
 }
 
 pub async fn load_or_create_secret_key(path: &Path, key_name: &str) -> Result<CacheSigningKey> {
@@ -115,12 +120,3 @@ async fn public_key_from_secret(path: &Path) -> Result<String> {
         .to_string())
 }
 
-pub async fn publish_cache_public_keys(
-    config: &crate::config::Config,
-    pool: &DbPool,
-) -> Result<()> {
-    let key =
-        load_or_create_secret_key(&config.cache_sign_key_path, &config.cache_key_name).await?;
-    crate::db::set_all_repo_store_cache_public_keys(pool, &key.public_key_line).await?;
-    Ok(())
-}

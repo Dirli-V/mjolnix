@@ -4,8 +4,9 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mjolnix_shared::config::{self, Config};
-use mjolnix_shared::db::{self, Build, BuildStatus, DbPool, Repo, RepoStore};
-use mjolnix_shared::store;
+use mjolnix_shared::db::{self, Build, BuildStatus, DbPool, Repo};
+use mjolnix_shared::signing;
+use mjolnix_shared::store::{self, RepoStore};
 use ratatui::widgets::ListState;
 
 use crate::hook;
@@ -141,7 +142,7 @@ impl App {
             Screen::RepoList => self.key_repo_list(key, pool).await?,
             Screen::CreateRepo => self.key_create_repo(key, config, pool).await?,
             Screen::RepoMenu => self.key_repo_menu(key, config, pool).await?,
-            Screen::BuildHistory => self.key_build_history(key, pool).await?,
+            Screen::BuildHistory => self.key_build_history(key, config, pool).await?,
             Screen::ScrollView => self.key_scroll(key),
         }
         Ok(())
@@ -219,7 +220,7 @@ impl App {
                     }
                     1 => {
                         let lines = if let Some(build) = &self.latest_build {
-                            build_detail_lines(pool, repo.id, build).await?
+                            build_detail_lines(&self.config, &repo, build).await?
                         } else {
                             vec!["No builds yet.".into()]
                         };
@@ -242,15 +243,18 @@ impl App {
         Ok(())
     }
 
-    async fn key_build_history(&mut self, key: KeyEvent, pool: &DbPool) -> Result<()> {
-        let repo_id = self.current_repo.as_ref().map(|r| r.id).unwrap_or(0);
+    async fn key_build_history(&mut self, key: KeyEvent, config: &Config, _pool: &DbPool) -> Result<()> {
+        let repo = match self.current_repo.as_ref() {
+            Some(r) => r,
+            None => return Ok(()),
+        };
         match key.code {
             KeyCode::Esc => self.screen = Screen::RepoMenu,
             KeyCode::Down | KeyCode::Char('j') => self.select_next_build(),
             KeyCode::Up | KeyCode::Char('k') => self.select_prev_build(),
             KeyCode::Enter => {
                 if let Some(build) = self.selected_build().cloned() {
-                    let mut lines = build_detail_lines(pool, repo_id, &build).await?;
+                    let mut lines = build_detail_lines(config, repo, &build).await?;
                     if let Some(path) = &build.log_path {
                         lines.push(String::new());
                         lines.push("--- log (last 50 lines) ---".into());
@@ -293,11 +297,7 @@ impl App {
     async fn open_repo(&mut self, pool: &DbPool, repo: &Repo) -> Result<()> {
         self.current_repo = Some(repo.clone());
         self.latest_build = db::latest_build_for_repo(pool, repo.id).await?;
-        self.cache_lines = if let Ok(Some(store)) = db::get_repo_store(pool, repo.id).await {
-            repo_cache_hint_lines(&store)
-        } else {
-            Vec::new()
-        };
+        self.cache_lines = repo_cache_hint_lines(&repo_store_for(&self.config, repo).await?);
         self.repo_menu.select(Some(0));
         self.screen = Screen::RepoMenu;
         Ok(())
@@ -410,18 +410,19 @@ impl App {
         if !status.success() {
             bail!("git init --bare failed");
         }
-        let (uid, gid) = store::process_uid_gid();
-        let repo_id =
-            db::create_repo(pool, config, self.user_id, NAMESPACE, &name, uid, gid).await?;
+        let repo_id = db::create_repo(pool, config, self.user_id, NAMESPACE, &name).await?;
         hook::install_post_receive_hook(config, NAMESPACE, &name)?;
 
         let mut lines = vec![
             format!("Created {NAMESPACE}/{name}"),
             format!("Clone: git clone {}", config.clone_url(NAMESPACE, &name)),
         ];
-        if let Some(repo_store) = db::get_repo_store(pool, repo_id).await? {
-            lines.extend(repo_cache_hint_lines(&repo_store));
-        }
+        let repo = db::Repo {
+            id: repo_id,
+            namespace: NAMESPACE.into(),
+            name: name.clone(),
+        };
+        lines.extend(repo_cache_hint_lines(&repo_store_for(config, &repo).await?));
         lines.push("Start worker for builds: mjolnix-worker".into());
         self.show_scroll(Screen::RepoList, "Repository created", lines);
         Ok(())
@@ -477,6 +478,14 @@ fn log_tail_lines(log_path: &str, lines: usize) -> Result<Vec<String>> {
     Ok(tail[start..].iter().map(|l| format!("  {l}")).collect())
 }
 
+async fn repo_store_for(config: &Config, repo: &Repo) -> Result<RepoStore> {
+    let (uid, gid) = store::process_uid_gid();
+    let cache_public_key = signing::try_load_secret_key(&config.cache_sign_key_path)
+        .await?
+        .map(|key| key.public_key_line);
+    Ok(store::repo_store(config, repo, uid, gid, cache_public_key))
+}
+
 fn repo_cache_hint_lines(repo_store: &RepoStore) -> Vec<String> {
     let mut lines = Vec::new();
     lines.push(format!("Binary cache: {}", repo_store.substituter_url));
@@ -495,7 +504,7 @@ fn repo_cache_hint_lines(repo_store: &RepoStore) -> Vec<String> {
     lines
 }
 
-async fn build_detail_lines(pool: &DbPool, repo_id: i64, build: &Build) -> Result<Vec<String>> {
+async fn build_detail_lines(config: &Config, repo: &Repo, build: &Build) -> Result<Vec<String>> {
     let mut lines = vec![
         format!("Build #{}", build.id),
         format!("  rev:      {}", build.rev),
@@ -525,17 +534,16 @@ async fn build_detail_lines(pool: &DbPool, repo_id: i64, build: &Build) -> Resul
                 ));
             }
         }
-        if let Ok(Some(repo_store)) = db::get_repo_store(pool, repo_id).await {
-            lines.push(String::new());
-            lines.extend(repo_cache_hint_lines(&repo_store));
-            if let Some(paths) = &build.closure_paths
-                && let Some(first) = paths.first()
-            {
-                lines.push(format!(
-                    "  Example: nix copy --from {} {first}",
-                    repo_store.substituter_url
-                ));
-            }
+        let repo_store = repo_store_for(config, repo).await?;
+        lines.push(String::new());
+        lines.extend(repo_cache_hint_lines(&repo_store));
+        if let Some(paths) = &build.closure_paths
+            && let Some(first) = paths.first()
+        {
+            lines.push(format!(
+                "  Example: nix copy --from {} {first}",
+                repo_store.substituter_url
+            ));
         }
     }
     Ok(lines)

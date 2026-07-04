@@ -3,7 +3,8 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
 use mjolnix_shared::config::Config;
-use mjolnix_shared::db::{self, Build, DbPool, Repo, RepoStore};
+use mjolnix_shared::db::{self, Build, DbPool, Repo};
+use mjolnix_shared::store::RepoStore;
 use mjolnix_shared::store;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -16,6 +17,7 @@ pub async fn run_build(
     repo: &Repo,
     uid: u32,
     gid: u32,
+    cache_public_key: Option<&str>,
 ) -> Result<()> {
     let log_path = config.build_log_path(build.repo_id, build.id);
     if let Some(parent) = log_path.parent() {
@@ -26,8 +28,15 @@ pub async fn run_build(
 
     db::set_build_running(pool, build.id, &log_path.to_string_lossy()).await?;
 
-    let repo_store =
-        db::ensure_repo_store(pool, config, repo.id, &repo.namespace, &repo.name, uid, gid).await?;
+    let store_root = store::store_root_for_repo(config, repo.id);
+    store::ensure_store_root(&store_root).await?;
+    let repo_store = store::repo_store(
+        config,
+        repo,
+        uid,
+        gid,
+        cache_public_key.map(str::to_string),
+    );
     let repo_path = config.repo_disk_path(&repo.namespace, &repo.name);
     let work_path = config.build_work_path(build.repo_id, &build.rev);
 

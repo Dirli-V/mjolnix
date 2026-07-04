@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use mjolnix_shared::config::Config;
 use mjolnix_shared::db::{self, Build, BuildStatus, DbPool};
-use mjolnix_shared::signing;
+use mjolnix_shared::signing::{self, CacheSigningKey};
 use mjolnix_shared::store;
 use sqlx::Row;
 use sqlx::postgres::PgListener;
@@ -26,10 +26,15 @@ async fn run(config: Config) -> Result<()> {
     let pool = db::connect(&config).await?;
     db::migrate(&pool).await?;
 
-    signing::publish_cache_public_keys(&config, &pool).await?;
+    let cache_signing_key = signing::load_or_create_secret_key(
+        &config.cache_sign_key_path,
+        &config.cache_key_name,
+    )
+    .await?;
 
     let config = Arc::new(config);
     let pool = Arc::new(pool);
+    let cache_signing_key = Arc::new(cache_signing_key);
     let semaphore = Arc::new(Semaphore::new(config.max_parallel_builds));
     let (slot_free_tx, mut slot_free_rx) = mpsc::unbounded_channel::<()>();
     let (uid, gid) = store::process_uid_gid();
@@ -54,6 +59,7 @@ async fn run(config: Config) -> Result<()> {
             Arc::clone(&config),
             Arc::clone(&pool),
             Arc::clone(&semaphore),
+            Arc::clone(&cache_signing_key),
             slot_free_tx.clone(),
             uid,
             gid,
@@ -80,6 +86,7 @@ async fn fill_slots(
     config: Arc<Config>,
     pool: Arc<DbPool>,
     semaphore: Arc<Semaphore>,
+    cache_signing_key: Arc<CacheSigningKey>,
     slot_free_tx: mpsc::UnboundedSender<()>,
     uid: u32,
     gid: u32,
@@ -98,6 +105,7 @@ async fn fill_slots(
         tokio::spawn(run_build_task(
             config.clone(),
             pool.clone(),
+            cache_signing_key.clone(),
             build,
             permit,
             slot_free_tx.clone(),
@@ -129,6 +137,7 @@ fn spawn_stale_build_checker(pool: Arc<DbPool>) {
 async fn run_build_task(
     config: Arc<Config>,
     pool: Arc<DbPool>,
+    cache_signing_key: Arc<CacheSigningKey>,
     build: Build,
     permit: tokio::sync::OwnedSemaphorePermit,
     slot_free_tx: mpsc::UnboundedSender<()>,
@@ -137,7 +146,16 @@ async fn run_build_task(
 ) {
     let build_id = build.id;
     let heartbeat = spawn_build_heartbeat(Arc::clone(&pool), build_id);
-    if let Err(err) = run_one_build(&config, &pool, &build, uid, gid).await {
+    if let Err(err) = run_one_build(
+        &config,
+        &pool,
+        &build,
+        uid,
+        gid,
+        Some(cache_signing_key.public_key_line.as_str()),
+    )
+    .await
+    {
         eprintln!("mjolnix-worker: build {build_id} failed: {err:#}");
     }
     heartbeat.abort();
@@ -165,6 +183,7 @@ async fn run_one_build(
     build: &Build,
     uid: u32,
     gid: u32,
+    cache_public_key: Option<&str>,
 ) -> Result<()> {
     if build.log_path.is_some() {
         return Ok(());
@@ -187,5 +206,5 @@ async fn run_one_build(
         namespace: repo_row.get("namespace"),
         name: repo_row.get("name"),
     };
-    build::run_build(config, pool, build, &repo, uid, gid).await
+    build::run_build(config, pool, build, &repo, uid, gid, cache_public_key).await
 }

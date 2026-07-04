@@ -8,16 +8,19 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Router, routing};
 use mjolnix_shared::config::Config;
-use mjolnix_shared::db::{self, DbPool, RepoStore};
+use mjolnix_shared::db::{self, DbPool};
 use mjolnix_shared::signing::{self, CacheSigningKey};
-use mjolnix_shared::store;
+use mjolnix_shared::store::{self, RepoStore};
 use serde::Deserialize;
 use tokio::process::Command;
 
 #[derive(Clone)]
 struct CacheState {
     pool: DbPool,
+    config: Arc<Config>,
     signing_key: Arc<CacheSigningKey>,
+    uid: u32,
+    gid: u32,
 }
 
 #[tokio::main]
@@ -30,15 +33,24 @@ async fn main() -> Result<()> {
     let signing_key =
         signing::load_or_create_secret_key(&config.cache_sign_key_path, &config.cache_key_name)
             .await?;
-    signing::publish_cache_public_keys(&config, &pool).await?;
+    let (uid, gid) = store::process_uid_gid();
 
-    run_server(&config, pool, signing_key).await
+    run_server(&config, pool, signing_key, uid, gid).await
 }
 
-async fn run_server(config: &Config, pool: DbPool, signing_key: CacheSigningKey) -> Result<()> {
+async fn run_server(
+    config: &Config,
+    pool: DbPool,
+    signing_key: CacheSigningKey,
+    uid: u32,
+    gid: u32,
+) -> Result<()> {
     let state = CacheState {
         pool,
+        config: Arc::new(config.clone()),
         signing_key: Arc::new(signing_key),
+        uid,
+        gid,
     };
     let app = Router::new()
         .route("/r/{namespace}/{name}/{*rest}", routing::get(serve))
@@ -66,10 +78,13 @@ async fn serve(
         .await
         .map_err(CacheError::internal)?
         .ok_or_else(|| CacheError::not_found("repository not found"))?;
-    let repo_store = db::get_repo_store(&state.pool, repo.id)
-        .await
-        .map_err(CacheError::internal)?
-        .ok_or_else(|| CacheError::not_found("repo store not configured"))?;
+    let repo_store = store::repo_store(
+        &state.config,
+        &repo,
+        state.uid,
+        state.gid,
+        Some(state.signing_key.public_key_line.clone()),
+    );
 
     let rest = rest.trim_start_matches('/');
     if rest.ends_with(".narinfo") {
