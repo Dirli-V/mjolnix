@@ -24,18 +24,16 @@ async fn run(config: Config) -> Result<()> {
     let pool = db::connect(&config).await?;
     db::migrate(&pool).await?;
 
-    let cache_signing_key = signing::load_or_create_secret_key(
-        &config.cache_sign_key_path,
-        &config.cache_key_name,
-    )
-    .await?;
+    let cache_signing_key =
+        signing::load_or_create_secret_key(&config.cache_sign_key_path, &config.cache_key_name)
+            .await?;
 
     let config = Arc::new(config);
     let pool = Arc::new(pool);
     let cache_signing_key = Arc::new(cache_signing_key);
     let semaphore = Arc::new(Semaphore::new(config.max_parallel_builds));
     let (slot_free_tx, mut slot_free_rx) = mpsc::unbounded_channel::<()>();
-    let (uid, gid) = store::process_uid_gid();
+    let store_ids = store::NixStoreIds::current();
 
     spawn_stale_build_checker(Arc::clone(&pool));
 
@@ -59,8 +57,7 @@ async fn run(config: Config) -> Result<()> {
             Arc::clone(&semaphore),
             Arc::clone(&cache_signing_key),
             slot_free_tx.clone(),
-            uid,
-            gid,
+            store_ids,
         )
         .await?;
 
@@ -86,8 +83,7 @@ async fn fill_slots(
     semaphore: Arc<Semaphore>,
     cache_signing_key: Arc<CacheSigningKey>,
     slot_free_tx: mpsc::UnboundedSender<()>,
-    uid: u32,
-    gid: u32,
+    store_ids: store::NixStoreIds,
 ) -> Result<()> {
     loop {
         let permit = semaphore
@@ -107,8 +103,7 @@ async fn fill_slots(
             build,
             permit,
             slot_free_tx.clone(),
-            uid,
-            gid,
+            store_ids,
         ));
     }
     Ok(())
@@ -139,8 +134,7 @@ async fn run_build_task(
     build: Build,
     permit: tokio::sync::OwnedSemaphorePermit,
     slot_free_tx: mpsc::UnboundedSender<()>,
-    uid: u32,
-    gid: u32,
+    store_ids: store::NixStoreIds,
 ) {
     let build_id = build.id;
     let heartbeat = spawn_build_heartbeat(Arc::clone(&pool), build_id);
@@ -148,8 +142,7 @@ async fn run_build_task(
         &config,
         &pool,
         &build,
-        uid,
-        gid,
+        store_ids,
         Some(cache_signing_key.public_key_line.as_str()),
     )
     .await
@@ -179,8 +172,7 @@ async fn run_one_build(
     config: &Config,
     pool: &DbPool,
     build: &Build,
-    uid: u32,
-    gid: u32,
+    store_ids: store::NixStoreIds,
     cache_public_key: Option<&str>,
 ) -> Result<()> {
     if build.log_path.is_some() {
@@ -195,5 +187,5 @@ async fn run_one_build(
     let Some(repo) = db::get_repo_by_id(pool, build.repo_id).await? else {
         bail!("repo {} not found for build {}", build.repo_id, build.id);
     };
-    build::run_build(config, pool, build, &repo, uid, gid, cache_public_key).await
+    build::run_build(config, pool, build, &repo, store_ids, cache_public_key).await
 }

@@ -19,8 +19,7 @@ struct CacheState {
     pool: DbPool,
     config: Arc<Config>,
     signing_key: Arc<CacheSigningKey>,
-    uid: u32,
-    gid: u32,
+    store_ids: store::NixStoreIds,
 }
 
 #[tokio::main]
@@ -33,24 +32,22 @@ async fn main() -> Result<()> {
     let signing_key =
         signing::load_or_create_secret_key(&config.cache_sign_key_path, &config.cache_key_name)
             .await?;
-    let (uid, gid) = store::process_uid_gid();
+    let store_ids = store::NixStoreIds::current();
 
-    run_server(&config, pool, signing_key, uid, gid).await
+    run_server(&config, pool, signing_key, store_ids).await
 }
 
 async fn run_server(
     config: &Config,
     pool: DbPool,
     signing_key: CacheSigningKey,
-    uid: u32,
-    gid: u32,
+    store_ids: store::NixStoreIds,
 ) -> Result<()> {
     let state = CacheState {
         pool,
         config: Arc::new(config.clone()),
         signing_key: Arc::new(signing_key),
-        uid,
-        gid,
+        store_ids,
     };
     let app = Router::new()
         .route("/r/{namespace}/{name}/{*rest}", routing::get(serve))
@@ -81,8 +78,7 @@ async fn serve(
     let repo_store = store::repo_store(
         &state.config,
         &repo,
-        state.uid,
-        state.gid,
+        state.store_ids,
         Some(state.signing_key.public_key_line.clone()),
     );
 

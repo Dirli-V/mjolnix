@@ -6,6 +6,25 @@ use tokio::process::Command;
 use crate::config::Config;
 use crate::db::Repo;
 
+/// Effective user and group IDs for accessing a per-repo Nix local store.
+#[derive(Debug, Clone, Copy)]
+pub struct NixStoreIds {
+    pub uid: u32,
+    pub gid: u32,
+}
+
+impl NixStoreIds {
+    pub fn current() -> Self {
+        // SAFETY: libc calls are thread-safe and have no preconditions.
+        unsafe {
+            Self {
+                uid: libc::geteuid(),
+                gid: libc::getegid(),
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RepoStore {
     pub repo_id: i64,
@@ -18,24 +37,25 @@ pub struct RepoStore {
 pub fn repo_store(
     config: &Config,
     repo: &Repo,
-    uid: u32,
-    gid: u32,
+    store_ids: NixStoreIds,
     cache_public_key: Option<String>,
 ) -> RepoStore {
     let store_root_path = store_root_for_repo(config, repo.id);
     RepoStore {
         repo_id: repo.id,
         store_root: store_root_path.to_string_lossy().into_owned(),
-        store_uri: store_uri(&store_root_path, uid, gid),
+        store_uri: store_uri(&store_root_path, store_ids),
         substituter_url: substituter_url(config, &repo.namespace, &repo.name),
         cache_public_key,
     }
 }
 
-pub fn store_uri(store_root: &Path, uid: u32, gid: u32) -> String {
+pub fn store_uri(store_root: &Path, store_ids: NixStoreIds) -> String {
     format!(
-        "local?root={}&uid={uid}&gid={gid}",
-        store_root.to_string_lossy()
+        "local?root={}&uid={}&gid={}",
+        store_root.to_string_lossy(),
+        store_ids.uid,
+        store_ids.gid,
     )
 }
 
@@ -126,7 +146,3 @@ pub fn validate_repo_route(namespace: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn process_uid_gid() -> (u32, u32) {
-    // SAFETY: libc calls are thread-safe and have no preconditions.
-    unsafe { (libc::geteuid(), libc::getegid()) }
-}

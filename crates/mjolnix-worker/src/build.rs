@@ -15,8 +15,7 @@ pub async fn run_build(
     pool: &DbPool,
     build: &Build,
     repo: &Repo,
-    uid: u32,
-    gid: u32,
+    store_ids: store::NixStoreIds,
     cache_public_key: Option<&str>,
 ) -> Result<()> {
     let log_path = config.build_log_path(build.repo_id, build.id);
@@ -33,8 +32,7 @@ pub async fn run_build(
     let repo_store = store::repo_store(
         config,
         repo,
-        uid,
-        gid,
+        store_ids,
         cache_public_key.map(str::to_string),
     );
     let repo_path = config.repo_disk_path(&repo.namespace, &repo.name);

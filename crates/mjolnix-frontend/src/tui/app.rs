@@ -479,11 +479,11 @@ fn log_tail_lines(log_path: &str, lines: usize) -> Result<Vec<String>> {
 }
 
 async fn repo_store_for(config: &Config, repo: &Repo) -> Result<RepoStore> {
-    let (uid, gid) = store::process_uid_gid();
+    let store_ids = store::NixStoreIds::current();
     let cache_public_key = signing::try_load_secret_key(&config.cache_sign_key_path)
         .await?
         .map(|key| key.public_key_line);
-    Ok(store::repo_store(config, repo, uid, gid, cache_public_key))
+    Ok(store::repo_store(config, repo, store_ids, cache_public_key))
 }
 
 fn repo_cache_hint_lines(repo_store: &RepoStore) -> Vec<String> {
