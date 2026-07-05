@@ -78,7 +78,7 @@ async fn serve(
         &state.config,
         &repo,
         state.store_ids,
-        Some(state.signing_key.public_key_line.clone()),
+        state.signing_key.public_key_line.clone(),
     );
 
     let rest = rest.trim_start_matches('/');

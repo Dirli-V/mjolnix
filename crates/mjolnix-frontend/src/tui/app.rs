@@ -243,7 +243,12 @@ impl App {
         Ok(())
     }
 
-    async fn key_build_history(&mut self, key: KeyEvent, config: &Config, _pool: &DbPool) -> Result<()> {
+    async fn key_build_history(
+        &mut self,
+        key: KeyEvent,
+        config: &Config,
+        _pool: &DbPool,
+    ) -> Result<()> {
         let repo = match self.current_repo.as_ref() {
             Some(r) => r,
             None => return Ok(()),
@@ -480,10 +485,13 @@ fn log_tail_lines(log_path: &str, lines: usize) -> Result<Vec<String>> {
 
 async fn repo_store_for(config: &Config, repo: &Repo) -> Result<RepoStore> {
     let store_ids = store::NixStoreIds::current();
-    let cache_public_key = signing::try_load_secret_key(&config.cache_sign_key_path)
-        .await?
-        .map(|key| key.public_key_line);
-    Ok(store::repo_store(config, repo, store_ids, cache_public_key))
+    let cache_key = signing::load_secret_key(&config.cache_sign_key_path).await?;
+    Ok(store::repo_store(
+        config,
+        repo,
+        store_ids,
+        cache_key.public_key_line,
+    ))
 }
 
 fn repo_cache_hint_lines(repo_store: &RepoStore) -> Vec<String> {
@@ -494,13 +502,10 @@ fn repo_cache_hint_lines(repo_store: &RepoStore) -> Vec<String> {
         "  extra-substituters = {}",
         repo_store.substituter_url
     ));
-    match &repo_store.cache_public_key {
-        Some(pk) => lines.push(format!("  trusted-public-keys = {pk}")),
-        None => lines.push(
-            "  trusted-public-keys = <unavailable - enable cache and ensure nix is installed>"
-                .into(),
-        ),
-    }
+    lines.push(format!(
+        "  trusted-public-keys = {}",
+        repo_store.cache_public_key
+    ));
     lines
 }
 

@@ -3,43 +3,38 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
 use mjolnix_shared::config::Config;
-use mjolnix_shared::db::{self, Build, DbPool, Repo};
-use mjolnix_shared::store::RepoStore;
+use mjolnix_shared::db::{self, Build, Repo};
 use mjolnix_shared::store;
+use mjolnix_shared::store::RepoStore;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
-pub async fn run_build(
-    config: &Config,
-    pool: &DbPool,
-    build: &Build,
-    repo: &Repo,
-    store_ids: store::NixStoreIds,
-    cache_public_key: Option<&str>,
-) -> Result<()> {
-    let log_path = config.build_log_path(build.repo_id, build.id);
+use crate::Ctx;
+
+pub async fn run_build(ctx: &Ctx, build: &Build, repo: &Repo) -> Result<()> {
+    let log_path = ctx.config.build_log_path(build.repo_id, build.id);
     if let Some(parent) = log_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .with_context(|| format!("create log dir {}", parent.display()))?;
     }
 
-    db::set_build_running(pool, build.id, &log_path.to_string_lossy()).await?;
+    db::set_build_running(&ctx.pool, build.id, &log_path.to_string_lossy()).await?;
 
-    let store_root = store::store_root_for_repo(config, repo.id);
+    let store_root = store::store_root_for_repo(&ctx.config, repo.id);
     store::ensure_store_root(&store_root).await?;
     let repo_store = store::repo_store(
-        config,
+        &ctx.config,
         repo,
-        store_ids,
-        cache_public_key.map(str::to_string),
+        ctx.store_ids,
+        ctx.cache_signing_key.public_key_line.clone(),
     );
-    let repo_path = config.repo_disk_path(&repo.namespace, &repo.name);
-    let work_path = config.build_work_path(build.repo_id, &build.rev);
+    let repo_path = ctx.config.repo_disk_path(&repo.namespace, &repo.name);
+    let work_path = ctx.config.build_work_path(build.repo_id, &build.rev);
 
     if let Err(err) = run_build_inner(
-        config,
+        &ctx.config,
         &repo_store,
         &repo_path,
         &build.rev,
@@ -50,13 +45,13 @@ pub async fn run_build(
     {
         let summary = err.to_string();
         let _ = append_log(&log_path, &format!("\n--- build failed ---\n{summary}\n")).await;
-        db::set_build_failed(pool, build.id, &truncate_summary(&summary)).await?;
+        db::set_build_failed(&ctx.pool, build.id, &truncate_summary(&summary)).await?;
         return Err(err);
     }
 
     let result_link = work_path.join("result");
     let paths = store::closure_paths(&repo_store.store_uri, &result_link).await?;
-    db::set_build_success(pool, build.id, &paths).await?;
+    db::set_build_success(&ctx.pool, build.id, &paths).await?;
     Ok(())
 }
 
@@ -110,21 +105,14 @@ async fn run_build_inner(
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
 
-    if let Some(ref public_key) = repo_store.cache_public_key {
-        cmd.args([
-            "--option",
-            "substituters",
-            &repo_store.substituter_url,
-            "--option",
-            "trusted-public-keys",
-            public_key,
-        ]);
-    } else {
-        log_file
-            .write_all(b"warning: cache enabled but cache_public_key not set yet\n")
-            .await
-            .ok();
-    }
+    cmd.args([
+        "--option",
+        "substituters",
+        &repo_store.substituter_url,
+        "--option",
+        "trusted-public-keys",
+        &repo_store.cache_public_key,
+    ]);
 
     let mut child = cmd.spawn().context("spawn nix build")?;
     let mut stdout = child.stdout.take();
@@ -134,34 +122,27 @@ async fn run_build_inner(
         let read_out = async {
             let mut buf = Vec::new();
             if let Some(out) = stdout.as_mut() {
-                out.read_to_end(&mut buf)
-                    .await
-                    .context("read nix stdout")?;
+                out.read_to_end(&mut buf).await.context("read nix stdout")?;
             }
             Ok::<Vec<u8>, anyhow::Error>(buf)
         };
         let read_err = async {
             let mut buf = Vec::new();
             if let Some(err) = stderr.as_mut() {
-                err.read_to_end(&mut buf)
-                    .await
-                    .context("read nix stderr")?;
+                err.read_to_end(&mut buf).await.context("read nix stderr")?;
             }
             Ok::<Vec<u8>, anyhow::Error>(buf)
         };
-        let (status, stdout_bytes, stderr_bytes) =
-            tokio::join!(child.wait(), read_out, read_err);
+        let (status, stdout_bytes, stderr_bytes) = tokio::join!(child.wait(), read_out, read_err);
         let status = status.context("wait nix build")?;
         Ok::<_, anyhow::Error>((status, stdout_bytes?, stderr_bytes?))
     };
 
-    let (status, stdout_bytes, stderr_bytes): (std::process::ExitStatus, Vec<u8>, Vec<u8>) = timeout(
-        Duration::from_secs(config.build_timeout_secs),
-        build_fut,
-    )
-    .await
-    .context("build timed out")?
-    .context("run nix build")?;
+    let (status, stdout_bytes, stderr_bytes): (std::process::ExitStatus, Vec<u8>, Vec<u8>) =
+        timeout(Duration::from_secs(config.build_timeout_secs), build_fut)
+            .await
+            .context("build timed out")?
+            .context("run nix build")?;
 
     log_file.write_all(&stdout_bytes).await.ok();
     log_file.write_all(&stderr_bytes).await.ok();

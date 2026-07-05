@@ -32,7 +32,6 @@ impl Config {
                     .ok_or_else(|| anyhow::anyhow!("could not determine data directory"))
             })
             .context("set MJOLNIX_DATA_DIR or use a standard home directory layout")?;
-
         let host = env::var("MJOLNIX_HOST").unwrap_or_else(|_| "localhost".into());
         let cache_bind = env::var("MJOLNIX_CACHE_BIND").unwrap_or_else(|_| "0.0.0.0:5000".into());
         let cache_host = env::var("MJOLNIX_CACHE_HOST").unwrap_or_else(|_| host.clone());
@@ -61,14 +60,12 @@ impl Config {
         let database_url = env::var("MJOLNIX_DATABASE_URL").context(
             "set MJOLNIX_DATABASE_URL (e.g. postgres://mjolnix:mjolnix@127.0.0.1:5432/mjolnix)",
         )?;
-
         let repos_dir = data_dir.join("repos");
         let stores_dir = env::var("MJOLNIX_STORES_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| data_dir.join("stores"));
         let work_dir = data_dir.join("work");
         let logs_dir = data_dir.join("logs");
-
         Ok(Self {
             data_dir,
             repos_dir,

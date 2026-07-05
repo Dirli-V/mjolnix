@@ -31,14 +31,14 @@ pub struct RepoStore {
     pub store_root: String,
     pub store_uri: String,
     pub substituter_url: String,
-    pub cache_public_key: Option<String>,
+    pub cache_public_key: String,
 }
 
 pub fn repo_store(
     config: &Config,
     repo: &Repo,
     store_ids: NixStoreIds,
-    cache_public_key: Option<String>,
+    cache_public_key: String,
 ) -> RepoStore {
     let store_root_path = store_root_for_repo(config, repo.id);
     RepoStore {
@@ -145,4 +145,3 @@ pub fn validate_repo_route(namespace: &str, name: &str) -> Result<()> {
     crate::config::validate_repo_name(name)?;
     Ok(())
 }
-
