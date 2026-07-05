@@ -5,8 +5,6 @@ use mjolnix_shared::config::Config;
 use mjolnix_shared::db::{self, Build, BuildStatus, DbPool};
 use mjolnix_shared::signing::{self, CacheSigningKey};
 use mjolnix_shared::store;
-use sqlx::Row;
-use sqlx::postgres::PgListener;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::time;
 
@@ -41,7 +39,7 @@ async fn run(config: Config) -> Result<()> {
 
     spawn_stale_build_checker(Arc::clone(&pool));
 
-    let mut listener = PgListener::connect(&config.database_url)
+    let mut listener = db::connect_listener(&config.database_url)
         .await
         .context("connect for LISTEN on build queue")?;
     listener
@@ -194,17 +192,8 @@ async fn run_one_build(
         return Ok(());
     }
 
-    let repo_row = sqlx::query("SELECT namespace, name FROM repos WHERE id = $1")
-        .bind(build.repo_id)
-        .fetch_optional(pool)
-        .await?;
-    let Some(repo_row) = repo_row else {
+    let Some(repo) = db::get_repo_by_id(pool, build.repo_id).await? else {
         bail!("repo {} not found for build {}", build.repo_id, build.id);
-    };
-    let repo = db::Repo {
-        id: build.repo_id,
-        namespace: repo_row.get("namespace"),
-        name: repo_row.get("name"),
     };
     build::run_build(config, pool, build, &repo, uid, gid, cache_public_key).await
 }

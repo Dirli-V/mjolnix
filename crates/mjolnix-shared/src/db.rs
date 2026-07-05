@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use sqlx::postgres::{PgPoolOptions, PgRow};
+use sqlx::postgres::{PgListener, PgPoolOptions, PgRow};
 use sqlx::types::Json;
 use sqlx::{PgPool, Row};
 
@@ -84,6 +84,12 @@ pub async fn migrate(pool: &DbPool) -> Result<()> {
     Ok(())
 }
 
+pub async fn connect_listener(database_url: &str) -> Result<PgListener> {
+    PgListener::connect(database_url)
+        .await
+        .context("connect for LISTEN")
+}
+
 pub async fn create_user(pool: &DbPool) -> Result<i64> {
     sqlx::query_scalar("INSERT INTO users DEFAULT VALUES RETURNING id")
         .fetch_one(pool)
@@ -125,14 +131,7 @@ pub async fn list_repos_for_user(pool: &DbPool, user_id: i64) -> Result<Vec<Repo
     .bind(user_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| Repo {
-            id: r.get("id"),
-            namespace: r.get("namespace"),
-            name: r.get("name"),
-        })
-        .collect())
+    Ok(rows.into_iter().map(row_to_repo).collect())
 }
 
 pub async fn get_repo(pool: &DbPool, namespace: &str, name: &str) -> Result<Option<Repo>> {
@@ -142,11 +141,15 @@ pub async fn get_repo(pool: &DbPool, namespace: &str, name: &str) -> Result<Opti
             .bind(name)
             .fetch_optional(pool)
             .await?;
-    Ok(row.map(|r| Repo {
-        id: r.get("id"),
-        namespace: r.get("namespace"),
-        name: r.get("name"),
-    }))
+    Ok(row.map(row_to_repo))
+}
+
+pub async fn get_repo_by_id(pool: &DbPool, repo_id: i64) -> Result<Option<Repo>> {
+    let row = sqlx::query("SELECT id, namespace, name FROM repos WHERE id = $1")
+        .bind(repo_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(row_to_repo))
 }
 
 pub async fn create_repo(
@@ -334,6 +337,14 @@ pub async fn fail_stale_running_builds(pool: &DbPool) -> Result<u64> {
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
+}
+
+fn row_to_repo(r: PgRow) -> Repo {
+    Repo {
+        id: r.get("id"),
+        namespace: r.get("namespace"),
+        name: r.get("name"),
+    }
 }
 
 fn row_to_build(r: &PgRow) -> Build {

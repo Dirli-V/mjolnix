@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 anyhow = "1"
 mjolnix-shared = { path = "../mjolnix-shared" }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
 tokio = { version = "1", features = [
     "io-util",
     "macros",
