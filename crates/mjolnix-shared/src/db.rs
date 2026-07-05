@@ -72,16 +72,13 @@ pub struct Build {
 }
 
 pub async fn connect(config: &Config) -> Result<DbPool> {
-    PgPoolOptions::new()
+    let pool = PgPoolOptions::new()
         .max_connections(10)
         .connect(&config.database_url)
         .await
-        .context("connect to PostgreSQL (check MJOLNIX_DATABASE_URL)")
-}
-
-pub async fn migrate(pool: &DbPool) -> Result<()> {
-    sqlx::migrate!("../../migrations").run(pool).await?;
-    Ok(())
+        .context("connect to PostgreSQL (check MJOLNIX_DATABASE_URL)")?;
+    sqlx::migrate!("../../migrations").run(&pool).await?;
+    Ok(pool)
 }
 
 pub async fn connect_listener(database_url: &str) -> Result<PgListener> {

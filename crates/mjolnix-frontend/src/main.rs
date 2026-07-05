@@ -40,7 +40,6 @@ async fn run() -> Result<()> {
     let config = Config::from_env()?;
     config.ensure_dirs()?;
     let pool = db::connect(&config).await?;
-    db::migrate(&pool).await?;
 
     if let Some(command) = git::remote_git_command() {
         return git::run(&config, &pool, &command).await;
@@ -60,7 +59,6 @@ async fn run_hook_post_receive(
 ) -> Result<()> {
     let config = Config::from_env()?;
     let pool = db::connect(&config).await?;
-    db::migrate(&pool).await?;
     hook::hook_post_receive(&config, &pool, namespace, name, old, new, ref_name).await
 }
 

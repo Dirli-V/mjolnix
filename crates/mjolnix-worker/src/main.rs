@@ -22,7 +22,6 @@ async fn main() -> Result<()> {
 async fn run(config: Config) -> Result<()> {
     config.ensure_dirs()?;
     let pool = db::connect(&config).await?;
-    db::migrate(&pool).await?;
 
     let cache_signing_key =
         signing::load_or_create_secret_key(&config.cache_sign_key_path, &config.cache_key_name)
